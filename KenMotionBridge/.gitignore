@@ -7,9 +7,11 @@ local.properties
 *.iml
 captures/
 
-# AAR proprietário do fabricante — NÃO versionar
+# AAR/JAR proprietário do fabricante — NÃO versionar (exceto o RobotSDK-client.jar,
+# necessário para o CI compilar o APK COM o SDK)
 app/libs/*.aar
 app/libs/*.jar
+!app/libs/RobotSDK-client.jar
 
 # Keystores
 *.jks
