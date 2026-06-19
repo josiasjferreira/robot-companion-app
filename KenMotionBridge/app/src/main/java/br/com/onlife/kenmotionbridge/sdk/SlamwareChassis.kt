@@ -28,13 +28,17 @@ import java.lang.reflect.Method
  *  - com.slamtec.slamware.robot.MoveDirection    (FORWARD/BACKWARD/TURN_LEFT/TURN_RIGHT)
  *  - binding AIDL com.csjbot.sdkhandler.ISdkAppToAar / IAarToSdkApp
  */
-class SlamwareChassis(private val context: Context, private val config: BridgeConfig) {
+class SlamwareChassis(
+    private val context: Context,
+    private val config: BridgeConfig,
+    /** Atualiza a tela: (conectado, erro, serviçoBound, classeSdkTentada). */
+    private val onStatus: (Boolean, String, Boolean, String) -> Unit = { _, _, _, _ -> },
+) {
 
     companion object {
         private const val TAG = "SlamwareChassis"
-        // Ação de bind do app-host do RobotSDK (CSJBot). Ajuste se o fabricante usar outra.
-        private const val CSJBOT_BIND_ACTION = "com.csjbot.sdkhandler.SdkService"
-        private const val CSJBOT_BIND_PKG = "com.csjbot.sdkhandler"
+        // Serviço do RobotSDK (CSJBot). Bind pela AÇÃO; o componente real é resolvido em runtime.
+        private const val CSJBOT_BIND_ACTION = "com.csjbot.robotsdkservice.startservice"
 
         private const val PLATFORM_CLS = "com.slamtec.slamware.SlamwareCorePlatform"
         private const val RTV_CLS = "com.slamtec.slamware.robot.RealTimeVelocity"
@@ -44,6 +48,13 @@ class SlamwareChassis(private val context: Context, private val config: BridgeCo
     @Volatile var connected: Boolean = false
         private set
 
+    /** Serviço do RobotSDK realmente bound? */
+    @Volatile private var bound: Boolean = false
+    /** Último erro/estado do SDK para exibir na tela. */
+    @Volatile private var sdkError: String = ""
+    /** Classe do SDK que a reflexão tentou carregar (mostrada na tela). */
+    @Volatile private var classTried: String = PLATFORM_CLS
+
     /** Handle do chassi (SlamwareCorePlatform). Object para não exigir o AAR em compile-time. */
     @Volatile private var platform: Any? = null
 
@@ -52,6 +63,8 @@ class SlamwareChassis(private val context: Context, private val config: BridgeCo
 
     private var sdkBinder: ISdkAppToAar? = null
     private val warnedOnce = HashSet<String>()
+
+    private fun report() = onStatus(connected, sdkError, bound, classTried)
 
     private val aarCallback = object : IAarToSdkApp.Stub() {
         override fun onSdkReady(info: String?) {
@@ -65,54 +78,143 @@ class SlamwareChassis(private val context: Context, private val config: BridgeCo
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             sdkBinder = ISdkAppToAar.Stub.asInterface(binder)
+            bound = true
+            connected = true
+            sdkError = ""
             runCatching {
                 sdkBinder?.register(aarCallback)
                 val info = sdkBinder?.requestChassis()
                 Log.i(TAG, "Binding CSJBot OK. requestChassis=$info")
-            }.onFailure { Log.w(TAG, "Falha no handshake CSJBot: ${it.message}") }
+            }.onFailure {
+                // Serviço bound, mas a interface AIDL não casou (descriptor diferente do AAR oficial).
+                sdkError = "serviço bound, mas handshake AIDL falhou: ${it.message} " +
+                    "(ISdkAppToAar pode diferir do AAR oficial)"
+                Log.w(TAG, sdkError)
+            }
+            report()
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             sdkBinder = null
-            Log.w(TAG, "Binding CSJBot desconectado")
+            bound = false
+            connected = platform != null
+            sdkError = "RobotSdkService desconectado"
+            Log.w(TAG, sdkError)
+            report()
         }
     }
 
     /** Conecta ao chassi. Tenta o binding CSJBot (se configurado) e a conexão Slamware direta. */
     fun connect(): Boolean {
+        classTried = PLATFORM_CLS
+        sdkError = ""
+        bound = false
+        connected = false
+        report()
         if (config.useCsjbotBinding) bindCsjbot()
         connectSlamware()
+        report()
         return connected
     }
 
     private fun bindCsjbot() {
-        runCatching {
-            val intent = Intent(CSJBOT_BIND_ACTION).apply { setPackage(CSJBOT_BIND_PKG) }
-            val ok = context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
-            Log.i(TAG, "bindService CSJBot solicitado (ok=$ok)")
-        }.onFailure { Log.w(TAG, "bindService CSJBot indisponível: ${it.message}") }
+        val intent = Intent(CSJBOT_BIND_ACTION)
+        // Bind explícito é exigido no Android 5+: resolve o componente real a partir da ação.
+        val resolved = runCatching { context.packageManager.resolveService(intent, 0) }.getOrNull()
+        if (resolved?.serviceInfo == null) {
+            sdkError = "RobotSdkService não encontrado — ação '$CSJBOT_BIND_ACTION' não instalada/rodando " +
+                "(confira se o app do RobotSDK está no aparelho e o <queries> no manifest)"
+            Log.e(TAG, sdkError)
+            return
+        }
+        val si = resolved.serviceInfo
+        intent.component = ComponentName(si.packageName, si.name)
+        Log.i(TAG, "RobotSdkService resolvido: ${si.packageName}/${si.name} exported=${si.exported}")
+
+        // (3) Sobe o serviço ANTES de bindar, para garantir que ele esteja rodando.
+        runCatching { context.startService(intent) }
+            .onFailure { Log.w(TAG, "startService(${si.packageName}) falhou: ${it.message}") }
+
+        // (2) bind com a ação/componente corretos.
+        val ok = try {
+            context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        } catch (se: SecurityException) {
+            sdkError = "bind negado — sem permissão para o serviço ${si.packageName} (${se.message})"
+            Log.e(TAG, sdkError)
+            return
+        }
+        if (!ok) {
+            sdkError = "bind negado — serviço não exportado/indisponível " +
+                "(exported=${si.exported}, ${si.packageName}/${si.name})"
+            Log.e(TAG, sdkError)
+        } else {
+            if (sdkError.isEmpty()) sdkError = "aguardando handshake do RobotSdkService…"
+            Log.i(TAG, "bindService solicitado (ok=true)")
+        }
     }
 
     private fun connectSlamware() {
+        classTried = PLATFORM_CLS
         try {
             val cls = Class.forName(PLATFORM_CLS)
             // SlamwareCorePlatform.connect(String ip, int port)
             val connect: Method = cls.getMethod("connect", String::class.java, Int::class.javaPrimitiveType)
             platform = connect.invoke(null, config.chassisIp, config.chassisPort)
-            connected = platform != null
-            Log.i(TAG, "Slamware conectado em ${config.chassisIp}:${config.chassisPort} -> $connected")
+            if (platform != null) {
+                connected = true
+                sdkError = ""
+                Log.i(TAG, "Slamware conectado em ${config.chassisIp}:${config.chassisPort}")
+            } else {
+                setSlamwareErrorIfEmpty(
+                    "SlamwareCorePlatform.connect retornou null — chassi ${config.chassisIp}:${config.chassisPort} inacessível"
+                )
+            }
         } catch (t: Throwable) {
-            connected = false
-            Log.e(TAG, "Falha ao conectar Slamware (AAR presente?): ${t.message}")
+            if (!connected) setSlamwareErrorIfEmpty(classifySlamware(t))
+            Log.e(TAG, "Falha Slamware: ${t.message}", t)
         }
+    }
+
+    /** Não sobrescreve um erro/estado do bind CSJBot (caminho primário do robô KEN). */
+    private fun setSlamwareErrorIfEmpty(msg: String) {
+        if (sdkError.isEmpty() || !config.useCsjbotBinding) sdkError = msg
+    }
+
+    /** Traduz a falha da reflexão Slamware num motivo específico. */
+    private fun classifySlamware(t: Throwable): String {
+        return when (val root = unwrap(t)) {
+            is ClassNotFoundException ->
+                "ClassNotFound: $PLATFORM_CLS — RobotSDK (AAR) ausente no APK"
+            is NoSuchMethodException ->
+                "NoSuchMethod: $PLATFORM_CLS.connect(String,int) — versão do AAR diferente da esperada"
+            is UnsatisfiedLinkError ->
+                "UnsatisfiedLinkError — biblioteca nativa (.so) do SDK ausente/ABI incompatível"
+            is java.net.ConnectException, is java.net.SocketTimeoutException ->
+                "Chassi inacessível — ${config.chassisIp}:${config.chassisPort} (${root.message})"
+            else -> "Falha Slamware: ${root.javaClass.simpleName}: ${root.message}"
+        }
+    }
+
+    /** Desempacota InvocationTargetException / ExceptionInInitializerError até a causa raiz. */
+    private fun unwrap(t: Throwable): Throwable {
+        var cur: Throwable = t
+        while (true) {
+            val c = cur.cause ?: break
+            if (cur is java.lang.reflect.InvocationTargetException || cur is ExceptionInInitializerError) {
+                cur = c
+            } else break
+        }
+        return cur
     }
 
     fun disconnect() {
         runCatching { sdkBinder?.unregister(aarCallback) }
         runCatching { context.unbindService(serviceConnection) }
-        val p = platform ?: return
-        invoke(p, "disconnect")
+        sdkBinder = null
+        bound = false
+        platform?.let { invoke(it, "disconnect") }
         platform = null
         connected = false
+        report()
     }
 
     // ── Controle de velocidade ──────────────────────────────────────────────

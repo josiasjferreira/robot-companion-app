@@ -13,6 +13,12 @@ data class BridgeStatus(
     /** Tamanho da senha enviada (senha mascarada na tela). */
     val brokerPassLen: Int = 0,
     val sdkConnected: Boolean = false,
+    /** Motivo exato da falha do SDK/Chassi (não encontrado, bind negado, ClassNotFound…). */
+    val sdkError: String = "",
+    /** Serviço do RobotSDK realmente bound? */
+    val sdkBound: Boolean = false,
+    /** Classe do SDK que a reflexão tentou carregar. */
+    val sdkClassTried: String = "",
     val lastCommand: String = "—",
     val lastCommandAt: Long = 0L,
     val linear: Double = 0.0,

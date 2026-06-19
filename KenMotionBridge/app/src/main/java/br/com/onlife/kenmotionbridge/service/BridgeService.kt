@@ -98,7 +98,16 @@ class BridgeService : Service() {
         StatusBus.update {
             it.copy(brokerUser = config.mqttUser, brokerPassLen = config.mqttPassword.length)
         }
-        chassis = SlamwareChassis(this, config)
+        chassis = SlamwareChassis(this, config) { connected, error, bnd, classTried ->
+            StatusBus.update {
+                it.copy(
+                    sdkConnected = connected,
+                    sdkError = error,
+                    sdkBound = bnd,
+                    sdkClassTried = classTried,
+                )
+            }
+        }
         motion = MotionController(chassis, config)
         mqtt = MqttManager(
             config = config,
@@ -114,11 +123,10 @@ class BridgeService : Service() {
         )
     }
 
-    /** Conecta chassi (SDK) e broker MQTT em background. */
+    /** Conecta chassi (SDK) e broker MQTT em background. O status do SDK chega pelo callback. */
     private fun connectAll() {
         scope.launch {
-            val sdkOk = chassis.connect()
-            StatusBus.update { it.copy(sdkConnected = sdkOk) }
+            chassis.connect()
             mqtt.connect()
         }
     }
@@ -131,8 +139,7 @@ class BridgeService : Service() {
             runCatching { chassis.disconnect() }
             config = BridgeConfig.load(this@BridgeService)
             buildPipeline()
-            val sdkOk = chassis.connect()
-            StatusBus.update { it.copy(sdkConnected = sdkOk) }
+            chassis.connect()
             mqtt.connect()
         }
     }

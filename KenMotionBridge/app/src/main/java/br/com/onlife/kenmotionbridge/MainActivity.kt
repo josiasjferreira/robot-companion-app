@@ -62,6 +62,14 @@ class MainActivity : AppCompatActivity() {
                     binding.txtBrokerAuth.text =
                         "Auth: user='${s.brokerUser}' (${s.brokerUser.length}) senha=${"•".repeat(s.brokerPassLen)} (${s.brokerPassLen})"
                     binding.txtSdk.text = "SDK / Chassi: ${onOff(s.sdkConnected)}"
+                    if (!s.sdkConnected && s.sdkError.isNotBlank()) {
+                        binding.txtSdkError.visibility = android.view.View.VISIBLE
+                        binding.txtSdkError.text = "↳ ${s.sdkError}"
+                    } else {
+                        binding.txtSdkError.visibility = android.view.View.GONE
+                    }
+                    binding.txtSdkInfo.text =
+                        "Serviço bound: ${if (s.sdkBound) "sim" else "não"}  |  classe SDK: ${s.sdkClassTried}"
                     binding.txtService.text = "Serviço: ${if (s.serviceRunning) "RODANDO" else "PARADO"}"
                     binding.txtLastCmd.text = "Último comando: ${s.lastCommand}"
                     binding.txtVelocity.text = "v = %.2f m/s    w = %.2f rad/s".format(s.linear, s.angular)

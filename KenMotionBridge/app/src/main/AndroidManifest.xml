@@ -11,6 +11,15 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Visibilidade de pacotes (Android 11+/targetSdk 34): permite resolver e bindar
+         o serviço do RobotSDK (CSJBot) por ação, mesmo estando em outro app. -->
+    <queries>
+        <intent>
+            <action android:name="com.csjbot.robotsdkservice.startservice" />
+        </intent>
+        <package android:name="com.csjbot.robotsdkservice" />
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"
