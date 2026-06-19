@@ -8,6 +8,10 @@ data class BridgeStatus(
     val brokerConnected: Boolean = false,
     /** Mensagem do último erro/estado do broker (auth, host, TLS…) para exibir na tela. */
     val brokerError: String = "",
+    /** Usuário exato enviado ao broker (para conferência na tela). */
+    val brokerUser: String = "",
+    /** Tamanho da senha enviada (senha mascarada na tela). */
+    val brokerPassLen: Int = 0,
     val sdkConnected: Boolean = false,
     val lastCommand: String = "—",
     val lastCommandAt: Long = 0L,

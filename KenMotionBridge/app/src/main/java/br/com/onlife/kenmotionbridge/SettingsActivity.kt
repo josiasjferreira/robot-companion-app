@@ -41,7 +41,7 @@ class SettingsActivity : AppCompatActivity() {
         }
         val port = binding.editPort.text.toString().trim().toIntOrNull() ?: 8883
         val user = binding.editUser.text.toString().trim()
-        val pass = binding.editPass.text.toString()
+        val pass = binding.editPass.text.toString().trim()
 
         BridgeConfig.saveSettings(this, host, port, user, pass)
 

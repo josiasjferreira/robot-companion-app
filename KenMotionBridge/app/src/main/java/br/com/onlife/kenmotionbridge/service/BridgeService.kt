@@ -94,6 +94,10 @@ class BridgeService : Service() {
 
     /** (Re)constrói chassi + controlador + cliente MQTT a partir do [config] atual. */
     private fun buildPipeline() {
+        // Expõe na tela o usuário/senha-mascarada que SERÃO enviados ao broker.
+        StatusBus.update {
+            it.copy(brokerUser = config.mqttUser, brokerPassLen = config.mqttPassword.length)
+        }
         chassis = SlamwareChassis(this, config)
         motion = MotionController(chassis, config)
         mqtt = MqttManager(

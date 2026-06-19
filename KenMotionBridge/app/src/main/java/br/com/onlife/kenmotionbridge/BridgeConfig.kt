@@ -66,7 +66,7 @@ data class BridgeConfig(
                 .putString(KEY_HOST, host.trim())
                 .putInt(KEY_PORT, port)
                 .putString(KEY_USER, user.trim())
-                .putString(KEY_PASS, pass)
+                .putString(KEY_PASS, pass.trim())
                 .apply()
         }
 
@@ -91,10 +91,11 @@ data class BridgeConfig(
                 val port = sp.getInt(KEY_PORT, 8883)
                 "ssl://$spHost:$port"
             } else uriFromAsset
-            val mqttUser = sp.getString(KEY_USER, null)?.takeIf { spHost.isNotEmpty() }
-                ?: mqtt.optString("username", "")
-            val mqttPassword = sp.getString(KEY_PASS, null)?.takeIf { spHost.isNotEmpty() }
-                ?: mqtt.optString("password", "")
+            // TRIM remove espaços/quebras acidentais coladas no campo (causa comum de "auth falhou").
+            val mqttUser = (sp.getString(KEY_USER, null)?.takeIf { spHost.isNotEmpty() }
+                ?: mqtt.optString("username", "")).trim()
+            val mqttPassword = (sp.getString(KEY_PASS, null)?.takeIf { spHost.isNotEmpty() }
+                ?: mqtt.optString("password", "")).trim()
 
             return BridgeConfig(
                 mqttUri = mqttUri,

@@ -36,6 +36,15 @@
             android:textColor="#FF6B6B"
             android:textSize="13sp"
             android:visibility="gone" />
+        <TextView
+            android:id="@+id/txtBrokerAuth"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:textColor="#8B98A5"
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:text="Auth: —" />
         <TextView android:id="@+id/txtSdk" style="@style/StatusLine" android:text="SDK / Chassi: —" />
         <TextView android:id="@+id/txtService" style="@style/StatusLine" android:text="Serviço: —" />
 

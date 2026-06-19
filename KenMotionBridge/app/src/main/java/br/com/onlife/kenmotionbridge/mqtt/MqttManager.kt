@@ -54,15 +54,24 @@ class MqttManager(
                 keepAliveInterval = config.keepAliveSec          // default 30 s
                 connectionTimeout = 10                            // 10 s
                 isHttpsHostnameVerificationEnabled = true
-                if (config.mqttUser.isNotEmpty()) userName = config.mqttUser
-                if (config.mqttPassword.isNotEmpty()) password = config.mqttPassword.toCharArray()
+                // Credenciais aplicadas DIRETO no opts passado ao connect (não são sobrescritas depois).
+                // Trim defensivo: remove espaços/quebras acidentais que quebram a autenticação.
+                if (config.mqttUser.isNotEmpty()) {
+                    userName = config.mqttUser.trim()
+                    password = config.mqttPassword.trim().toCharArray()
+                }
                 // TLS habilitado para ssl:// e wss:// (SSLSocketFactory padrão do sistema).
                 if (config.mqttUri.startsWith("ssl") || config.mqttUri.startsWith("wss")) {
                     socketFactory = buildSslContext().socketFactory
                 }
             }
 
-            Log.i(TAG, "Conectando a ${config.mqttUri} (user=${config.mqttUser})")
+            // Log do usuário EXATO enviado (senha mascarada) — confira no Logcat e na tela.
+            Log.i(
+                TAG,
+                "Conectando a ${config.mqttUri} | clientId=$cid | user='${opts.userName}' " +
+                    "(len=${opts.userName?.length ?: 0}) | passLen=${opts.password?.size ?: 0}"
+            )
 
             c.setCallback(object : MqttCallbackExtended {
                 override fun connectComplete(reconnect: Boolean, serverURI: String?) {

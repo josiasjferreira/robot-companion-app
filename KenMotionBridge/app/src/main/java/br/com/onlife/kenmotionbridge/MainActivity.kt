@@ -58,6 +58,9 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         binding.txtBrokerError.visibility = android.view.View.GONE
                     }
+                    // Usuário EXATO enviado ao broker (entre aspas p/ revelar espaços) + senha mascarada.
+                    binding.txtBrokerAuth.text =
+                        "Auth: user='${s.brokerUser}' (${s.brokerUser.length}) senha=${"•".repeat(s.brokerPassLen)} (${s.brokerPassLen})"
                     binding.txtSdk.text = "SDK / Chassi: ${onOff(s.sdkConnected)}"
                     binding.txtService.text = "Serviço: ${if (s.serviceRunning) "RODANDO" else "PARADO"}"
                     binding.txtLastCmd.text = "Último comando: ${s.lastCommand}"
