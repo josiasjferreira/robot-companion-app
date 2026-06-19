@@ -44,6 +44,32 @@ data class BridgeConfig(
         private const val ASSET = "bridge_config.json"
         private val OVERRIDE = File("/sdcard/kenmotion/config.json")
 
+        // SharedPreferences usado pela tela de Configurações.
+        const val PREFS = "ken_bridge_settings"
+        const val KEY_HOST = "mqtt_host"
+        const val KEY_PORT = "mqtt_port"
+        const val KEY_USER = "mqtt_user"
+        const val KEY_PASS = "mqtt_pass"
+
+        /** Host (sem esquema/porta) extraído de uma URI ssl://host:porta ou wss://host:porta/path. */
+        fun hostFromUri(uri: String): String =
+            uri.substringAfter("://").substringBefore(":").substringBefore("/")
+
+        /** Porta extraída da URI; default 8883 (MQTT/TLS nativo). */
+        fun portFromUri(uri: String): Int =
+            uri.substringAfter("://").substringAfter(":", "").substringBefore("/")
+                .toIntOrNull() ?: 8883
+
+        /** Persiste os valores da tela de Configurações. */
+        fun saveSettings(context: Context, host: String, port: Int, user: String, pass: String) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString(KEY_HOST, host.trim())
+                .putInt(KEY_PORT, port)
+                .putString(KEY_USER, user.trim())
+                .putString(KEY_PASS, pass)
+                .apply()
+        }
+
         fun load(context: Context): BridgeConfig {
             val base = readAsset(context)
             val merged = if (OVERRIDE.exists()) {
@@ -57,10 +83,23 @@ data class BridgeConfig(
             val chassis = merged.optJSONObject("chassis") ?: JSONObject()
             val motion = merged.optJSONObject("motion") ?: JSONObject()
 
+            // Override da TELA de configurações (SharedPreferences) — prioridade máxima.
+            val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val spHost = sp.getString(KEY_HOST, null)?.trim().orEmpty()
+            val uriFromAsset = mqtt.optString("uri", "ssl://localhost:8883")
+            val mqttUri = if (spHost.isNotEmpty()) {
+                val port = sp.getInt(KEY_PORT, 8883)
+                "ssl://$spHost:$port"
+            } else uriFromAsset
+            val mqttUser = sp.getString(KEY_USER, null)?.takeIf { spHost.isNotEmpty() }
+                ?: mqtt.optString("username", "")
+            val mqttPassword = sp.getString(KEY_PASS, null)?.takeIf { spHost.isNotEmpty() }
+                ?: mqtt.optString("password", "")
+
             return BridgeConfig(
-                mqttUri = mqtt.optString("uri", "ssl://localhost:8883"),
-                mqttUser = mqtt.optString("username", ""),
-                mqttPassword = mqtt.optString("password", ""),
+                mqttUri = mqttUri,
+                mqttUser = mqttUser,
+                mqttPassword = mqttPassword,
                 clientId = mqtt.optString("clientId", "ken-motion-bridge"),
                 cleanSession = mqtt.optBoolean("cleanSession", true),
                 keepAliveSec = mqtt.optInt("keepAliveSec", 30),

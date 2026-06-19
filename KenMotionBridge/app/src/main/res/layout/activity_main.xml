@@ -28,6 +28,14 @@
             android:textSize="13sp" />
 
         <TextView android:id="@+id/txtBroker" style="@style/StatusLine" android:text="Broker MQTT: —" />
+        <TextView
+            android:id="@+id/txtBrokerError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:textColor="#FF6B6B"
+            android:textSize="13sp"
+            android:visibility="gone" />
         <TextView android:id="@+id/txtSdk" style="@style/StatusLine" android:text="SDK / Chassi: —" />
         <TextView android:id="@+id/txtService" style="@style/StatusLine" android:text="Serviço: —" />
 
@@ -49,12 +57,12 @@
             android:orientation="horizontal">
 
             <Button
-                android:id="@+id/btnStart"
+                android:id="@+id/btnRestart"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
                 android:layout_weight="1"
-                android:text="Iniciar ponte" />
+                android:text="Reiniciar ponte" />
 
             <Button
                 android:id="@+id/btnStop"
@@ -64,5 +72,12 @@
                 android:layout_weight="1"
                 android:text="Parar ponte" />
         </LinearLayout>
+
+        <Button
+            android:id="@+id/btnSettings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Configurações do broker" />
     </LinearLayout>
 </ScrollView>

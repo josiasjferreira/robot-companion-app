@@ -25,16 +25,23 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        binding.btnStart.setOnClickListener {
+        binding.btnRestart.setOnClickListener {
             ensureNotificationPermission()
-            ContextCompat.startForegroundService(this, Intent(this, BridgeService::class.java))
+            // (Re)inicia a ponte e força reconexão ao broker com a config atual.
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, BridgeService::class.java).apply { action = BridgeService.ACTION_RESTART }
+            )
         }
         binding.btnStop.setOnClickListener {
             startService(Intent(this, BridgeService::class.java).apply { action = BridgeService.ACTION_STOP })
         }
+        binding.btnSettings.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
 
         ensureNotificationPermission()
-        // Inicia a ponte assim que a tela abre.
+        // Inicia a ponte e conecta ao broker automaticamente assim que a tela abre.
         ContextCompat.startForegroundService(this, Intent(this, BridgeService::class.java))
 
         observeStatus()
@@ -45,6 +52,12 @@ class MainActivity : AppCompatActivity() {
             repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
                 StatusBus.state.collectLatest { s ->
                     binding.txtBroker.text = "Broker MQTT: ${onOff(s.brokerConnected)}"
+                    if (!s.brokerConnected && s.brokerError.isNotBlank()) {
+                        binding.txtBrokerError.visibility = android.view.View.VISIBLE
+                        binding.txtBrokerError.text = "↳ ${s.brokerError}"
+                    } else {
+                        binding.txtBrokerError.visibility = android.view.View.GONE
+                    }
                     binding.txtSdk.text = "SDK / Chassi: ${onOff(s.sdkConnected)}"
                     binding.txtService.text = "Serviço: ${if (s.serviceRunning) "RODANDO" else "PARADO"}"
                     binding.txtLastCmd.text = "Último comando: ${s.lastCommand}"

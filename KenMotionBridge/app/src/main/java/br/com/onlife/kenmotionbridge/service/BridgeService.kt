@@ -42,6 +42,7 @@ class BridgeService : Service() {
         private const val CHANNEL_ID = "ken_motion_bridge"
         private const val NOTIF_ID = 1001
         const val ACTION_STOP = "br.com.onlife.kenmotionbridge.STOP"
+        const val ACTION_RESTART = "br.com.onlife.kenmotionbridge.RESTART"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -53,45 +54,83 @@ class BridgeService : Service() {
     private lateinit var motion: MotionController
     private lateinit var mqtt: MqttManager
     private var wakeLock: PowerManager.WakeLock? = null
+    /** true logo após onCreate, para não reconectar em dobro quando o start traz ACTION_RESTART. */
+    private var freshlyCreated = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         config = BridgeConfig.load(this)
-        chassis = SlamwareChassis(this, config)
-        motion = MotionController(chassis, config)
-        mqtt = MqttManager(
-            config = config,
-            onConnectionChanged = { up ->
-                StatusBus.update { it.copy(brokerConnected = up) }
-            },
-            onCommand = { payload -> motion.onCommand(payload) },
-        )
+        buildPipeline()
 
         createChannel()
         startForeground(NOTIF_ID, buildNotification("Iniciando…"))
         acquireWakeLock()
 
-        // Conexões (fora da thread principal).
+        connectAll()
+
+        startControlLoop()
+        startFeedbackLoop()
+        StatusBus.update { it.copy(serviceRunning = true) }
+        freshlyCreated = true
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_RESTART -> {
+                // Se o serviço acabou de subir, onCreate já conectou; evita reconexão dupla.
+                if (!freshlyCreated) restartConnections()
+            }
+        }
+        freshlyCreated = false
+        // START_STICKY: o sistema reinicia o serviço se for morto.
+        return START_STICKY
+    }
+
+    /** (Re)constrói chassi + controlador + cliente MQTT a partir do [config] atual. */
+    private fun buildPipeline() {
+        chassis = SlamwareChassis(this, config)
+        motion = MotionController(chassis, config)
+        mqtt = MqttManager(
+            config = config,
+            onConnectionChanged = { up, err ->
+                StatusBus.update {
+                    it.copy(
+                        brokerConnected = up,
+                        brokerError = if (up) "" else (err ?: it.brokerError),
+                    )
+                }
+            },
+            onCommand = { payload -> motion.onCommand(payload) },
+        )
+    }
+
+    /** Conecta chassi (SDK) e broker MQTT em background. */
+    private fun connectAll() {
         scope.launch {
             val sdkOk = chassis.connect()
             StatusBus.update { it.copy(sdkConnected = sdkOk) }
             mqtt.connect()
         }
-
-        startControlLoop()
-        startFeedbackLoop()
-        StatusBus.update { it.copy(serviceRunning = true) }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopSelf()
-            return START_NOT_STICKY
+    /** Recarrega config (settings) e reconecta tudo — usado pelo botão "Reiniciar ponte". */
+    private fun restartConnections() {
+        scope.launch {
+            StatusBus.update { it.copy(brokerConnected = false, brokerError = "reiniciando…") }
+            runCatching { mqtt.disconnect() }
+            runCatching { chassis.disconnect() }
+            config = BridgeConfig.load(this@BridgeService)
+            buildPipeline()
+            val sdkOk = chassis.connect()
+            StatusBus.update { it.copy(sdkConnected = sdkOk) }
+            mqtt.connect()
         }
-        // START_STICKY: o sistema reinicia o serviço se for morto.
-        return START_STICKY
     }
 
     /** Loop de controle a ~controlHz (default 20 Hz / 50 ms). */

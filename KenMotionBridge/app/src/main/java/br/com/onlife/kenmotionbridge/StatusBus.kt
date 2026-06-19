@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.StateFlow
 /** Estado vivo compartilhado entre o serviço e a tela de status. */
 data class BridgeStatus(
     val brokerConnected: Boolean = false,
+    /** Mensagem do último erro/estado do broker (auth, host, TLS…) para exibir na tela. */
+    val brokerError: String = "",
     val sdkConnected: Boolean = false,
     val lastCommand: String = "—",
     val lastCommandAt: Long = 0L,

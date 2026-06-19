@@ -8,20 +8,33 @@ import org.eclipse.paho.client.mqttv3.MqttCallbackExtended
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttException
 import org.eclipse.paho.client.mqttv3.MqttMessage
+import org.eclipse.paho.client.mqttv3.MqttSecurityException
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLException
+import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
 /**
- * Cliente MQTT (Paho) ligado ao MESMO broker do app web (HiveMQ Cloud, TLS).
- * Suporta `ssl://` (MQTT/TLS nativo) e `wss://` (WebSocket Secure).
+ * Cliente MQTT NATIVO (Paho) ligado ao MESMO broker do app web (HiveMQ Cloud).
+ *
+ * Importante: o navegador/Lovable usa WebSocket Secure (`wss://HOST:8884/mqtt`); o cliente
+ * Paho nativo no Android deve usar **MQTT/TLS** (`ssl://HOST:8883`). Ambos são suportados aqui,
+ * mas o padrão recomendado é `ssl://...:8883`.
+ *
+ * Em caso de falha, reporta o MOTIVO exato (auth, host inacessível, TLS handshake) via
+ * [onConnectionChanged] para que a tela mostre o erro real em vez de só "DESCONECTADO".
  */
 class MqttManager(
     private val config: BridgeConfig,
-    private val onConnectionChanged: (Boolean) -> Unit,
+    /** (conectado, mensagemDeErro?) — erro só vem preenchido quando conectado=false. */
+    private val onConnectionChanged: (Boolean, String?) -> Unit,
     private val onCommand: (String) -> Unit,
 ) {
     companion object { private const val TAG = "MqttManager" }
@@ -35,26 +48,32 @@ class MqttManager(
             client = c
 
             val opts = MqttConnectOptions().apply {
+                // Reconexão automática + sessão limpa, conforme pedido.
                 isAutomaticReconnect = true
-                isCleanSession = config.cleanSession
-                keepAliveInterval = config.keepAliveSec
-                connectionTimeout = 10
+                isCleanSession = config.cleanSession            // default true
+                keepAliveInterval = config.keepAliveSec          // default 30 s
+                connectionTimeout = 10                            // 10 s
+                isHttpsHostnameVerificationEnabled = true
                 if (config.mqttUser.isNotEmpty()) userName = config.mqttUser
                 if (config.mqttPassword.isNotEmpty()) password = config.mqttPassword.toCharArray()
+                // TLS habilitado para ssl:// e wss:// (SSLSocketFactory padrão do sistema).
                 if (config.mqttUri.startsWith("ssl") || config.mqttUri.startsWith("wss")) {
                     socketFactory = buildSslContext().socketFactory
                 }
             }
 
+            Log.i(TAG, "Conectando a ${config.mqttUri} (user=${config.mqttUser})")
+
             c.setCallback(object : MqttCallbackExtended {
                 override fun connectComplete(reconnect: Boolean, serverURI: String?) {
                     Log.i(TAG, "Conectado (reconnect=$reconnect) a $serverURI")
-                    onConnectionChanged(true)
+                    onConnectionChanged(true, null)
                     subscribeCmd()
                 }
                 override fun connectionLost(cause: Throwable?) {
-                    Log.w(TAG, "Conexão perdida: ${cause?.message}")
-                    onConnectionChanged(false)
+                    val msg = describe(cause)
+                    Log.w(TAG, "Conexão perdida: $msg")
+                    onConnectionChanged(false, "conexão perdida — $msg")
                 }
                 override fun messageArrived(topic: String?, message: MqttMessage?) {
                     if (topic == config.topicCmd && message != null) {
@@ -67,13 +86,15 @@ class MqttManager(
             c.connect(opts, null, object : org.eclipse.paho.client.mqttv3.IMqttActionListener {
                 override fun onSuccess(asyncActionToken: org.eclipse.paho.client.mqttv3.IMqttToken?) {}
                 override fun onFailure(asyncActionToken: org.eclipse.paho.client.mqttv3.IMqttToken?, ex: Throwable?) {
-                    Log.e(TAG, "Falha ao conectar: ${ex?.message}")
-                    onConnectionChanged(false)
+                    val msg = describe(ex)
+                    Log.e(TAG, "Falha ao conectar: $msg", ex)
+                    onConnectionChanged(false, msg)
                 }
             })
-        } catch (e: MqttException) {
-            Log.e(TAG, "Erro de MQTT: ${e.message}", e)
-            onConnectionChanged(false)
+        } catch (e: Throwable) {
+            val msg = describe(e)
+            Log.e(TAG, "Erro de MQTT: $msg", e)
+            onConnectionChanged(false, msg)
         }
     }
 
@@ -103,6 +124,41 @@ class MqttManager(
     }
 
     /**
+     * Traduz a exceção do Paho num motivo legível para a tela:
+     * autenticação, host inacessível ou falha de TLS.
+     */
+    private fun describe(t: Throwable?): String {
+        val root = rootCause(t)
+        // 1) Erros de autenticação/autorização do MQTT (códigos do CONNACK).
+        val mqttEx = (t as? MqttException) ?: (root as? MqttException)
+        if (t is MqttSecurityException || mqttEx?.reasonCode?.toInt() in AUTH_CODES) {
+            return "AUTENTICAÇÃO falhou — usuário/senha do HiveMQ incorretos ou sem permissão"
+        }
+        return when {
+            root is SSLHandshakeException ->
+                "TLS handshake falhou — certificado/relógio do dispositivo ou porta errada (use ssl://…:8883). ${root.message ?: ""}".trim()
+            root is SSLException ->
+                "Erro TLS — ${root.message ?: "falha no canal seguro"}"
+            root is UnknownHostException ->
+                "HOST inacessível — não foi possível resolver o endereço (verifique o host e a internet)"
+            root is ConnectException ->
+                "HOST inacessível — conexão recusada/sem rota (verifique host:porta e firewall)"
+            root is SocketTimeoutException ->
+                "TIMEOUT — broker não respondeu em 10 s (host/porta/internet)"
+            mqttEx != null ->
+                "MQTT erro ${mqttEx.reasonCode}: ${mqttEx.message ?: root?.message ?: ""}".trim()
+            else ->
+                root?.message ?: t?.message ?: "erro desconhecido"
+        }
+    }
+
+    private fun rootCause(t: Throwable?): Throwable? {
+        var cur = t
+        while (cur?.cause != null && cur.cause !== cur) cur = cur.cause
+        return cur
+    }
+
+    /**
      * SSLContext para o HiveMQ Cloud. Por padrão usa os trust managers do sistema
      * (CA pública do HiveMQ). Se `tlsInsecure=true`, aceita qualquer certificado
      * (APENAS para diagnóstico em rede fechada — não usar em produção).
@@ -120,3 +176,9 @@ class MqttManager(
         }
     }
 }
+
+/** Códigos de CONNACK do Paho que indicam falha de credenciais. */
+private val AUTH_CODES = setOf(
+    MqttException.REASON_CODE_FAILED_AUTHENTICATION.toInt(),  // 4 — bad user/password
+    MqttException.REASON_CODE_NOT_AUTHORIZED.toInt(),         // 5 — not authorized
+)
