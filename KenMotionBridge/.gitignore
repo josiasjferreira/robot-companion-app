@@ -1,0 +1,16 @@
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+.cxx/
+*.iml
+captures/
+
+# AAR proprietário do fabricante — NÃO versionar
+app/libs/*.aar
+app/libs/*.jar
+
+# Keystores
+*.jks
+*.keystore

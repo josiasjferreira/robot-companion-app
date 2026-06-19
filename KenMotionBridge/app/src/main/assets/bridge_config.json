@@ -1,0 +1,41 @@
+{
+  "_comment": "Config do KenMotionBridge. Edite com os dados do SEU cluster HiveMQ Cloud. Pode ser sobrescrito em runtime por /sdcard/kenmotion/config.json (mesmo formato).",
+
+  "mqtt": {
+    "_comment": "Use ssl://HOST:8883 (MQTT/TLS nativo, recomendado no Android) OU wss://HOST:8884/mqtt para WebSocket. Mesmo broker do app web.",
+    "uri": "ssl://SEU-CLUSTER.s1.eu.hivemq.cloud:8883",
+    "username": "ken-robot",
+    "password": "TROQUE-ME",
+    "clientId": "ken-motion-bridge",
+    "cleanSession": true,
+    "keepAliveSec": 30,
+    "tlsInsecure": false
+  },
+
+  "topics": {
+    "cmd": "ken/motion/cmd",
+    "feedback": "ken/motion/feedback",
+    "telemetry": "ken/sensors/telemetry"
+  },
+
+  "chassis": {
+    "_comment": "Endereço do chassi Slamware (Slamware via TCP 1445). Normalmente 192.168.11.1.",
+    "ip": "192.168.11.1",
+    "port": 1445,
+    "useCsjbotBinding": true
+  },
+
+  "motion": {
+    "_comment": "Tetos de segurança aplicados de forma RÍGIDA no código (estes valores nunca relaxam os limites do firmware).",
+    "vMax": 0.4,
+    "vMaxBoost": 0.7,
+    "wMax": 0.8,
+    "deadzone": 0.08,
+    "accelLinear": 0.8,
+    "accelAngular": 2.5,
+    "watchdogMs": 400,
+    "controlHz": 20,
+    "safeFrontCm": 40.0,
+    "invertAngular": false
+  }
+}
