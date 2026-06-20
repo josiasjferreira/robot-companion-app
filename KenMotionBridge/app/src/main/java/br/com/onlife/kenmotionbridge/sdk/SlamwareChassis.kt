@@ -37,8 +37,11 @@ class SlamwareChassis(
 
     companion object {
         private const val TAG = "SlamwareChassis"
-        // Serviço do RobotSDK (CSJBot). Bind pela AÇÃO; o componente real é resolvido em runtime.
+        // Serviço do RobotSDK (CSJBot). Bind pela AÇÃO (resolvido em runtime) e, como
+        // fallback, pelo COMPONENTE explícito (pacote/serviço conhecidos do app do RobotSDK).
         private const val CSJBOT_BIND_ACTION = "com.csjbot.robotsdkservice.startservice"
+        private const val CSJBOT_PKG = "com.csjbot.robotsdk.ten"
+        private const val CSJBOT_SERVICE = "com.csjbot.robotsdk.service.RobotSdkService"
 
         private const val PLATFORM_CLS = "com.slamtec.slamware.SlamwareCorePlatform"
         private const val RTV_CLS = "com.slamtec.slamware.robot.RealTimeVelocity"
@@ -118,37 +121,39 @@ class SlamwareChassis(
 
     private fun bindCsjbot() {
         val intent = Intent(CSJBOT_BIND_ACTION)
-        // Bind explícito é exigido no Android 5+: resolve o componente real a partir da ação.
+
+        // (1) Tenta resolver o componente real a partir da AÇÃO (bind explícito é exigido no Android 5+).
         val resolved = runCatching { context.packageManager.resolveService(intent, 0) }.getOrNull()
-        if (resolved?.serviceInfo == null) {
-            sdkError = "RobotSdkService não encontrado — ação '$CSJBOT_BIND_ACTION' não instalada/rodando " +
-                "(confira se o app do RobotSDK está no aparelho e o <queries> no manifest)"
-            Log.e(TAG, sdkError)
-            return
+        val component: ComponentName = if (resolved?.serviceInfo != null) {
+            val si = resolved.serviceInfo
+            Log.i(TAG, "RobotSdkService resolvido pela ação: ${si.packageName}/${si.name} exported=${si.exported}")
+            ComponentName(si.packageName, si.name)
+        } else {
+            // (1b) Fallback: componente EXPLÍCITO conhecido do app do RobotSDK.
+            Log.w(TAG, "Ação '$CSJBOT_BIND_ACTION' não resolvida; tentando componente explícito $CSJBOT_PKG/$CSJBOT_SERVICE")
+            ComponentName(CSJBOT_PKG, CSJBOT_SERVICE)
         }
-        val si = resolved.serviceInfo
-        intent.component = ComponentName(si.packageName, si.name)
-        Log.i(TAG, "RobotSdkService resolvido: ${si.packageName}/${si.name} exported=${si.exported}")
+        intent.component = component
 
-        // (3) Sobe o serviço ANTES de bindar, para garantir que ele esteja rodando.
+        // (3) Sobe o serviço ANTES de bindar, para garantir que o RobotSdkService esteja rodando.
         runCatching { context.startService(intent) }
-            .onFailure { Log.w(TAG, "startService(${si.packageName}) falhou: ${it.message}") }
+            .onFailure { Log.w(TAG, "startService(${component.packageName}) falhou: ${it.message}") }
 
-        // (2) bind com a ação/componente corretos.
+        // (2) bind com a ação + componente corretos.
         val ok = try {
             context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         } catch (se: SecurityException) {
-            sdkError = "bind negado — sem permissão para o serviço ${si.packageName} (${se.message})"
+            sdkError = "bind negado — sem permissão para o serviço ${component.packageName} (${se.message})"
             Log.e(TAG, sdkError)
             return
         }
         if (!ok) {
-            sdkError = "bind negado — serviço não exportado/indisponível " +
-                "(exported=${si.exported}, ${si.packageName}/${si.name})"
+            sdkError = "RobotSdkService não encontrado/indisponível — ${component.packageName}/${component.shortClassName} " +
+                "não instalado, não exportado ou sem permissão (confira o app do RobotSDK e o <queries> no manifest)"
             Log.e(TAG, sdkError)
         } else {
-            if (sdkError.isEmpty()) sdkError = "aguardando handshake do RobotSdkService…"
-            Log.i(TAG, "bindService solicitado (ok=true)")
+            if (sdkError.isEmpty()) sdkError = "aguardando handshake do RobotSdkService ($CSJBOT_PKG)…"
+            Log.i(TAG, "bindService solicitado (ok=true) em ${component.packageName}/${component.shortClassName}")
         }
     }
 
