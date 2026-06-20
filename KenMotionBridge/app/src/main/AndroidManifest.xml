@@ -51,6 +51,13 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
+        <!-- Canal de callbacks AIDL: o RobotSdkService faz bind DE VOLTA neste serviço,
+             usando o packageName passado em connectToSDK(). Precisa ser EXPORTADO. -->
+        <service
+            android:name="com.aidlagent.AIDLClientService"
+            android:enabled="true"
+            android:exported="true" />
+
         <receiver
             android:name=".service.BootReceiver"
             android:enabled="true"

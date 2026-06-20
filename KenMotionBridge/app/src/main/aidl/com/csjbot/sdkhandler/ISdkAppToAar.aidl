@@ -1,21 +1,12 @@
-// ISdkAppToAar.aidl
-//
-// Interface exposta pelo app-host do RobotSDK. O KenMotionBridge faz bindService()
-// nela para registrar seu callback e obter o handle do chassi.
-//
-// IMPORTANTE: scaffold compatível com o padrão com.csjbot.sdkhandler. Se houver
-// um .aidl oficial no AAR do fabricante, use-o no lugar deste (ver IAarToSdkApp.aidl).
+// ISdkAppToAar.aidl — callback IMPLEMENTADO pelo bridge (o RobotSdkService CHAMA nele).
+// Exposto pelo nosso serviço com.aidlagent.AIDLClientService (bind de volta do robô).
+// Assinaturas confirmadas via javap no RobotSDK-client.jar.
 package com.csjbot.sdkhandler;
 
-import com.csjbot.sdkhandler.IAarToSdkApp;
-
 interface ISdkAppToAar {
-    // Registra o callback do KenMotionBridge no SDK do fabricante.
-    void register(IAarToSdkApp callback);
+    // O SDK do robô confirma que a sessão foi estabelecida.
+    void connectToSDKSucceed();
 
-    void unregister(IAarToSdkApp callback);
-
-    // Solicita ao SDK a inicialização/handle do chassi Slamware (TCP 1445).
-    // Retorna info de conexão (ex.: ip:porta) ou null se o SDK gerencia internamente.
-    String requestChassis();
+    // Mensagens JSON vindas do SDK do robô (telemetria/estados/respostas).
+    void sdkAppMsgToAar(String json);
 }

@@ -87,6 +87,8 @@ class MainActivity : AppCompatActivity() {
                         idadeMs > 3000 -> "Telemetria: SEM SINAL (${idadeMs / 1000}s)"
                         else -> "Telemetria: ativa  |  Loc: ${if (s.localization < 0) "—" else "${s.localization}%"}"
                     }
+                    binding.txtSdkTx.text = "TX: ${s.sdkTx.take(120)}"
+                    binding.txtSdkRx.text = "RX: ${s.sdkRx.take(120)}"
                 }
             }
         }

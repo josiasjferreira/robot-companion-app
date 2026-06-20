@@ -69,6 +69,44 @@
             android:textColor="#E6EDF3"
             android:textColorHint="#5B6776" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Comandos de movimento (AIDL) — confirme os valores no robô"
+            android:textColor="#E6EDF3"
+            android:textStyle="bold"
+            android:textSize="15sp" />
+
+        <TextView style="@style/StatusLine" android:text="msg_id do movimento" />
+        <EditText
+            android:id="@+id/editMoveMsg"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="NAVI_ROBOT_MOVE_REQ"
+            android:inputType="textNoSuggestions"
+            android:textColor="#E6EDF3"
+            android:textColorHint="#5B6776" />
+
+        <TextView style="@style/StatusLine" android:text="Direções (inteiros): frente / trás / esq / dir" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <EditText android:id="@+id/editDirFwd" android:layout_width="0dp" android:layout_weight="1"
+                android:layout_height="wrap_content" android:hint="0" android:inputType="numberSigned"
+                android:textColor="#E6EDF3" android:textColorHint="#5B6776" />
+            <EditText android:id="@+id/editDirBack" android:layout_width="0dp" android:layout_weight="1"
+                android:layout_height="wrap_content" android:hint="1" android:inputType="numberSigned"
+                android:textColor="#E6EDF3" android:textColorHint="#5B6776" />
+            <EditText android:id="@+id/editDirLeft" android:layout_width="0dp" android:layout_weight="1"
+                android:layout_height="wrap_content" android:hint="2" android:inputType="numberSigned"
+                android:textColor="#E6EDF3" android:textColorHint="#5B6776" />
+            <EditText android:id="@+id/editDirRight" android:layout_width="0dp" android:layout_weight="1"
+                android:layout_height="wrap_content" android:hint="3" android:inputType="numberSigned"
+                android:textColor="#E6EDF3" android:textColorHint="#5B6776" />
+        </LinearLayout>
+
         <Button
             android:id="@+id/btnSave"
             android:layout_width="match_parent"

@@ -6,229 +6,58 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
 /**
- * KenMotionSdk — camada ÚNICA e central de **controle de movimento do chassi** do robô KEN.
+ * KenMotionSdk — camada central de **controle de movimento do chassi**, agora 100% via
+ * AIDL ([RobotChassis] → RobotSdkService). Não usa SDK in-process (sem Slamware/CSJBot
+ * carregados no processo do bridge).
  *
- * Esta classe é a única porta de entrada para comandos de movimento. Ela encapsula os
- * detalhes do RobotSDK (CSJBot `coshandler`) e expõe métodos de alto nível
- * (moverFrente/moverTras/virarEsquerda/virarDireita/pararMovimento).
- *
- * Integração (confirmada por `javap` no RobotSDK-client.jar):
- *  - `com.csjbot.coshandler.core.Robot` (singleton): `getInstance()`, `getConnectState()`,
- *    e os comandos discretos `moveForward/moveBack/moveLeft/moveRight/turnLeft/turnRight`
- *    (interface `com.csjbot.coshandler.core.interfaces.IChassis`).
- *  - `com.csjbot.coshandler.core.ClientReqProxy` / `...client_req.chassis.ChassisReqImpl`
- *    (interface `IChassisReq`): `move(int)`, `moveAngle(int)`, `goAngle(int)`, `navi(String)`,
- *    `cancelNavi()`, `setSpeed(float)`, `setAngularVelocity(float)`, `goHome()`.
- *
- * As chamadas ao SDK proprietário são feitas por REFLEXÃO — mesmo critério do
- * [SlamwareChassis] — para que o projeto compile/gere APK mesmo sem o AAR e degrade com
- * segurança (loga e ignora) caso uma assinatura mude entre versões do RobotSDK.
- *
- * @param chassis (opcional) ponte Slamware de velocidade em tempo real; usada por
- *        [pararMovimento] para também zerar a velocidade do caminho de joystick.
+ * Porta de entrada única: inicializarConexaoRobo / moverFrente / moverTras /
+ * virarEsquerda / virarDireita / pararMovimento.
  */
-class KenMotionSdk(private val chassis: SlamwareChassis? = null) {
+class KenMotionSdk(private val chassis: RobotChassis?) {
 
-    companion object {
-        private const val TAG = "KenMotionSdk"
-
-        private const val ROBOT_CLS = "com.csjbot.coshandler.core.Robot"
-        private const val PROXY_CLS = "com.csjbot.coshandler.core.ClientReqProxy"
-
-        /** Velocidade linear padrão (m/s) — limitada de forma defensiva. */
-        const val VELOCIDADE_PADRAO = 0.3f
-        const val VELOCIDADE_MAX = 0.7f
-        const val VELOCIDADE_ANGULAR_MAX = 0.8f
-    }
-
-    /** Instância singleton de `Robot` (Object para não exigir o AAR em compile-time). */
-    @Volatile private var robot: Any? = null
-    /** Proxy de requisições de chassi (`ClientReqProxy`). */
-    @Volatile private var proxy: Any? = null
-    @Volatile private var inicializado = false
+    companion object { private const val TAG = "KenMotionSdk" }
 
     private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
-    private val warnedOnce = HashSet<String>()
 
-    // ── Ciclo de vida / estado ────────────────────────────────────────────────
-
-    /**
-     * Inicializa o acesso ao RobotSDK. Obtém `Robot.getInstance()` e cria o `ClientReqProxy`.
-     * Se [mqttUrl] for informado, também tenta `Robot.connectMqttServer(url,user,senha)`.
-     * @return true se o handle do robô foi obtido (não garante sessão ativa — ver [estaConectado]).
-     */
-    fun inicializarConexaoRobo(
-        mqttUrl: String? = null,
-        usuario: String? = null,
-        senha: String? = null,
-    ): Boolean {
-        Log.i(TAG, "inicializarConexaoRobo(url=$mqttUrl, user=$usuario)")
-        robot = runCatching {
-            Class.forName(ROBOT_CLS).getMethod("getInstance").invoke(null)
-        }.onFailure { Log.e(TAG, "Falha ao obter Robot.getInstance(): ${it.message}") }.getOrNull()
-
-        proxy = runCatching {
-            Class.forName(PROXY_CLS).getDeclaredConstructor().newInstance()
-        }.onFailure { Log.w(TAG, "Falha ao criar ClientReqProxy: ${it.message}") }.getOrNull()
-
-        if (robot != null && mqttUrl != null) {
-            invoke(
-                robot!!, "connectMqttServer",
-                arrayOf(String::class.java, String::class.java, String::class.java),
-                arrayOf(mqttUrl, usuario ?: "", senha ?: ""),
-            )
-        }
-
-        inicializado = robot != null
-        Log.i(TAG, "inicializado=$inicializado conectado=${estaConectado()}")
-        return inicializado
+    /** A conexão é estabelecida pelo BridgeService via RobotChassis.connect(); aqui só refletimos o estado. */
+    fun inicializarConexaoRobo(): Boolean {
+        val ok = estaConectado()
+        Log.i(TAG, "inicializarConexaoRobo — conectado=$ok")
+        return ok
     }
 
-    /** Estado de conexão/sessão do robô (`Robot.getConnectState()`), default false. */
-    fun estaConectado(): Boolean = runCatching {
-        Class.forName(ROBOT_CLS).getMethod("getConnectState").invoke(null) as? Boolean ?: false
-    }.getOrDefault(false)
+    fun estaConectado(): Boolean = chassis?.connected == true
 
-    // ── Comandos de movimento (porta de entrada única) ────────────────────────
+    fun moverFrente(duracaoMs: Long? = null) = comando("moverFrente", RobotChassis.Dir.FORWARD, duracaoMs)
+    fun moverTras(duracaoMs: Long? = null) = comando("moverTras", RobotChassis.Dir.BACKWARD, duracaoMs)
+    fun virarEsquerda(duracaoMs: Long? = null) = comando("virarEsquerda", RobotChassis.Dir.LEFT, duracaoMs)
+    fun virarDireita(duracaoMs: Long? = null) = comando("virarDireita", RobotChassis.Dir.RIGHT, duracaoMs)
 
-    /** Move o chassi para frente. [velocidade] em m/s; se [duracaoMs] != null, para sozinho depois. */
-    fun moverFrente(velocidade: Float = VELOCIDADE_PADRAO, duracaoMs: Long? = null) =
-        comandoDirecional("moverFrente", "moveForward", velocidade, duracaoMs)
-
-    /** Move o chassi para trás. */
-    fun moverTras(velocidade: Float = VELOCIDADE_PADRAO, duracaoMs: Long? = null) =
-        comandoDirecional("moverTras", "moveBack", velocidade, duracaoMs)
-
-    /**
-     * Gira à esquerda. Se [angulo] for informado, usa rotação por ângulo (`goAngle`);
-     * caso contrário, giro contínuo (`turnLeft`). Convenção: ângulo positivo = esquerda.
-     */
-    fun virarEsquerda(angulo: Int? = null, velocidade: Float? = null) =
-        comandoRotacao("virarEsquerda", contInuo = "turnLeft", angulo = angulo, sinalAngulo = +1, velocidade = velocidade)
-
-    /** Gira à direita. Convenção: ângulo negativo = direita. */
-    fun virarDireita(angulo: Int? = null, velocidade: Float? = null) =
-        comandoRotacao("virarDireita", contInuo = "turnRight", angulo = angulo, sinalAngulo = -1, velocidade = velocidade)
-
-    /** Interrompe QUALQUER movimento em andamento (navegação + velocidade em tempo real). */
     fun pararMovimento() {
         Log.i(TAG, "pararMovimento — enviando comando de parada ao robô…")
-        val p = proxy ?: robot
-        if (p != null) {
-            invoke(p, "cancelNavi", emptyArray(), emptyArray())
-            invokeFloat(p, "setSpeed", 0f)
-            invokeFloat(p, "setAngularVelocity", 0f)
-        } else {
-            Log.w(TAG, "pararMovimento: proxy/robot indisponível (SDK não inicializado)")
-        }
-        // Cobre também o caminho de velocidade em tempo real (joystick/Slamware).
-        runCatching {
-            chassis?.cancelAction()
-            chassis?.sendVelocity(0.0, 0.0)
-        }
+        if (chassis == null) { Log.w(TAG, "pararMovimento ignorado — sem chassi"); return }
+        chassis.sendStop()
     }
 
-    // ── Internos ──────────────────────────────────────────────────────────────
-
-    private fun comandoDirecional(api: String, metodoSdk: String, velocidade: Float, duracaoMs: Long?) {
-        val v = velocidade.coerceIn(0f, VELOCIDADE_MAX)
-        Log.i(TAG, "Chamado $api com velocidade=$v duracaoMs=$duracaoMs")
-        if (!garantirConectado(api)) return
-
-        // Abordagem 1 (preferida): movimento DIRETO via SlamwareCorePlatform.moveBy(MoveDirection).
-        if (chassis?.connected == true) {
-            val dir = if (metodoSdk == "moveForward") SlamwareChassis.Dir.FORWARD else SlamwareChassis.Dir.BACKWARD
-            Log.i(TAG, "Enviando comando de movimento ao robô (direto Slamware): moveBy($dir)")
-            if (chassis.moveBy(dir)) { agendarParadaSeNecessario(duracaoMs); return }
+    private fun comando(api: String, dir: RobotChassis.Dir, duracaoMs: Long?) {
+        Log.i(TAG, "Chamado $api (dir=$dir, duracaoMs=$duracaoMs)")
+        val c = chassis
+        if (c == null) { Log.e(TAG, "Erro ao enviar comando: $api — sem chassi"); return }
+        if (!c.connected) {
+            Log.e(TAG, "Erro ao enviar comando: $api ignorado — chassi não conectado (aguardando connectToSDKSucceed)")
+            return
         }
-
-        // Fallback: RobotSDK CSJBot (Robot/ClientReqProxy).
-        val alvo = proxy ?: robot ?: return
-        invokeFloat(alvo, "setSpeed", v)
-        Log.i(TAG, "Enviando comando de movimento ao robô (CSJBot): $metodoSdk (v=$v)")
-        if (!invoke(robot ?: alvo, metodoSdk, emptyArray(), emptyArray())) {
-            Log.e(TAG, "Erro ao enviar comando: método '$metodoSdk' indisponível no Robot")
+        Log.i(TAG, "Enviando comando de movimento ao robô (AIDL): move($dir)")
+        if (!c.move(dir)) Log.e(TAG, "Erro ao enviar comando: move($dir) falhou")
+        if (duracaoMs != null && duracaoMs > 0) {
+            scheduler.schedule({
+                Log.i(TAG, "Duração de ${duracaoMs}ms expirou — parando")
+                pararMovimento()
+            }, duracaoMs, TimeUnit.MILLISECONDS)
         }
-        agendarParadaSeNecessario(duracaoMs)
-    }
-
-    private fun comandoRotacao(api: String, contInuo: String, angulo: Int?, sinalAngulo: Int, velocidade: Float?) {
-        Log.i(TAG, "Chamado $api com angulo=$angulo velocidade=$velocidade")
-        if (!garantirConectado(api)) return
-
-        // Abordagem 1 (preferida): rotação DIRETA via SlamwareCorePlatform.
-        if (chassis?.connected == true) {
-            if (angulo != null) {
-                val graus = (sinalAngulo * kotlin.math.abs(angulo)).toFloat()
-                Log.i(TAG, "Enviando comando de movimento ao robô (direto Slamware): rotate($graus°)")
-                if (chassis.rotate(graus)) return
-            } else {
-                val dir = if (sinalAngulo > 0) SlamwareChassis.Dir.TURN_LEFT else SlamwareChassis.Dir.TURN_RIGHT
-                Log.i(TAG, "Enviando comando de movimento ao robô (direto Slamware): moveBy($dir)")
-                if (chassis.moveBy(dir)) return
-            }
-        }
-
-        // Fallback: RobotSDK CSJBot.
-        val alvo = proxy ?: robot ?: return
-        if (velocidade != null) invokeFloat(alvo, "setAngularVelocity", velocidade.coerceIn(0f, VELOCIDADE_ANGULAR_MAX))
-        if (angulo != null) {
-            val graus = sinalAngulo * kotlin.math.abs(angulo)
-            Log.i(TAG, "Enviando comando de movimento ao robô (CSJBot): goAngle($graus)")
-            if (!invokeInt(alvo, "goAngle", graus) && !invokeInt(alvo, "moveAngle", graus)) {
-                Log.e(TAG, "Erro ao enviar comando: goAngle/moveAngle indisponíveis")
-            }
-        } else {
-            Log.i(TAG, "Enviando comando de movimento ao robô (CSJBot): $contInuo (contínuo)")
-            if (!invoke(robot ?: alvo, contInuo, emptyArray(), emptyArray())) {
-                Log.e(TAG, "Erro ao enviar comando: método '$contInuo' indisponível")
-            }
-        }
-    }
-
-    /** Verifica sessão ativa antes de aceitar comandos (requisito de segurança). */
-    private fun garantirConectado(api: String): Boolean {
-        // Aceita se o canal DIRETO Slamware está conectado (Abordagem 1)…
-        if (chassis?.connected == true) return true
-        // …ou se a sessão do RobotSDK CSJBot está ativa (Abordagem 2).
-        if (!inicializado) {
-            Log.e(TAG, "Erro ao enviar comando: $api ignorado — sem conexão (chassi direto OFF e SDK não inicializado)")
-            return false
-        }
-        if (!estaConectado()) {
-            Log.e(TAG, "Erro ao enviar comando: $api ignorado — robô não conectado/autenticado (getConnectState=false)")
-            return false
-        }
-        return true
-    }
-
-    private fun agendarParadaSeNecessario(duracaoMs: Long?) {
-        if (duracaoMs == null || duracaoMs <= 0) return
-        scheduler.schedule({
-            Log.i(TAG, "Duração de ${duracaoMs}ms expirou — parando movimento automaticamente")
-            pararMovimento()
-        }, duracaoMs, TimeUnit.MILLISECONDS)
     }
 
     fun liberar() {
         runCatching { scheduler.shutdownNow() }
     }
-
-    // ── Helpers de reflexão (tolerantes) ──────────────────────────────────────
-
-    private fun invoke(target: Any, name: String, types: Array<Class<*>>, args: Array<Any?>): Boolean = try {
-        target.javaClass.getMethod(name, *types).invoke(target, *args)
-        true
-    } catch (e: NoSuchMethodException) {
-        false
-    } catch (t: Throwable) {
-        if (warnedOnce.add(name)) Log.w(TAG, "Método '$name' falhou: ${t.message}")
-        false
-    }
-
-    private fun invokeFloat(target: Any, name: String, value: Float): Boolean =
-        invoke(target, name, arrayOf(Float::class.javaPrimitiveType!!), arrayOf(value))
-
-    private fun invokeInt(target: Any, name: String, value: Int): Boolean =
-        invoke(target, name, arrayOf(Int::class.javaPrimitiveType!!), arrayOf(value))
 }

@@ -38,6 +38,9 @@ data class BridgeStatus(
     val charging: Boolean = false,
     /** Epoch (ms) da última telemetria válida lida do chassi (para detectar congelamento). */
     val telemetryAt: Long = 0L,
+    /** Último JSON enviado/recebido via AIDL (diagnóstico na tela). */
+    val sdkTx: String = "—",
+    val sdkRx: String = "—",
 )
 
 object StatusBus {
