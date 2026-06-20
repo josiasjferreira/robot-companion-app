@@ -351,6 +351,8 @@ class SlamwareChassis(
         val poseX: Double,           // m, NaN se indisponível
         val poseY: Double,
         val poseYawDeg: Double,
+        val pitchDeg: Double,        // IMU (graus), NaN se indisponível
+        val rollDeg: Double,
         val vLinear: Double,         // m/s medido (RealTimeVelocity)
         val vAngular: Double,        // rad/s medido
         val frontCm: Double,         // distância frontal (LaserScan), NaN se indisponível
@@ -372,14 +374,20 @@ class SlamwareChassis(
         val p = platform
         if (p == null) {
             return ChassisTelemetry(false, -1, false, Double.NaN, Double.NaN, Double.NaN,
-                0.0, 0.0, Double.NaN, -1, Double.NaN)
+                Double.NaN, Double.NaN, 0.0, 0.0, Double.NaN, -1, Double.NaN)
         }
-        // Pose (x, y, yaw em radianos -> graus).
-        var px = Double.NaN; var py = Double.NaN; var yawDeg = Double.NaN
+        // Pose (x, y) + atitude IMU (yaw/pitch/roll, radianos -> graus) via Pose.getRotation().
+        var px = Double.NaN; var py = Double.NaN
+        var yawDeg = Double.NaN; var pitchDeg = Double.NaN; var rollDeg = Double.NaN
         invokeReturningObject(p, "getPose")?.let { pose ->
             invokeReturningDouble(pose, "getX")?.let { px = it }
             invokeReturningDouble(pose, "getY")?.let { py = it }
             invokeReturningDouble(pose, "getYaw")?.let { yawDeg = Math.toDegrees(it) }
+            invokeReturningObject(pose, "getRotation")?.let { rot ->
+                invokeReturningDouble(rot, "getYaw")?.let { yawDeg = Math.toDegrees(it) }
+                invokeReturningDouble(rot, "getPitch")?.let { pitchDeg = Math.toDegrees(it) }
+                invokeReturningDouble(rot, "getRoll")?.let { rollDeg = Math.toDegrees(it) }
+            }
         }
         // Velocidade medida (RealTimeVelocity).
         var vLin = 0.0; var vAng = 0.0
@@ -398,6 +406,7 @@ class SlamwareChassis(
             battery = batteryPercent(),
             charging = (invokeReturningDouble(p, "getBatteryIsCharging") ?: 0.0) != 0.0,
             poseX = px, poseY = py, poseYawDeg = yawDeg,
+            pitchDeg = pitchDeg, rollDeg = rollDeg,
             vLinear = vLin, vAngular = vAng,
             frontCm = frontDistanceCm(),
             localization = loc,
@@ -463,6 +472,14 @@ class SlamwareChassis(
                 put("pose", JSONObject().apply {
                     put("x", round3(t.poseX)); put("y", round3(t.poseY))
                     if (!t.poseYawDeg.isNaN()) put("yaw_deg", round1(t.poseYawDeg))
+                })
+            }
+            // IMU (graus) — consumido pelo card de Telemetria do app web (/admin/movimento).
+            if (!t.poseYawDeg.isNaN() || !t.pitchDeg.isNaN() || !t.rollDeg.isNaN()) {
+                put("imu", JSONObject().apply {
+                    if (!t.poseYawDeg.isNaN()) put("yaw", round1(t.poseYawDeg))
+                    if (!t.pitchDeg.isNaN()) put("pitch", round1(t.pitchDeg))
+                    if (!t.rollDeg.isNaN()) put("roll", round1(t.rollDeg))
                 })
             }
             put("v_measured", round3(t.vLinear))
