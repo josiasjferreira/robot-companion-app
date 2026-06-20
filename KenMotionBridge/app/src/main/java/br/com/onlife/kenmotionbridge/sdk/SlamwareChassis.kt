@@ -341,42 +341,141 @@ class SlamwareChassis(
 
     // ── Sensores / telemetria ────────────────────────────────────────────────
 
-    /** Distância frontal em centímetros; NaN se indisponível. */
+    // ── Telemetria (API real confirmada via javap) ───────────────────────────
+
+    /** Snapshot coeso da telemetria do chassi (fonte única). */
+    data class ChassisTelemetry(
+        val dcConnected: Boolean,
+        val battery: Int,            // %, -1 se indisponível
+        val charging: Boolean,
+        val poseX: Double,           // m, NaN se indisponível
+        val poseY: Double,
+        val poseYawDeg: Double,
+        val vLinear: Double,         // m/s medido (RealTimeVelocity)
+        val vAngular: Double,        // rad/s medido
+        val frontCm: Double,         // distância frontal (LaserScan), NaN se indisponível
+        val localization: Int,       // 0–100, -1 se indisponível
+        val odometry: Double,        // m, NaN se indisponível
+    )
+
+    /** Canal direto realmente ativo? (`SlamwareCorePlatform.getDCIsConnected()`) */
+    fun dcConnected(): Boolean {
+        val p = platform ?: return false
+        return invokeReturningDouble(p, "getDCIsConnected")?.let { it != 0.0 } ?: false
+    }
+
+    /**
+     * Lê TODA a telemetria em uma passada (uma fonte de verdade). Tolerante: cada campo
+     * que falhar vira NaN/-1 sem interromper os demais.
+     */
+    fun readTelemetry(): ChassisTelemetry {
+        val p = platform
+        if (p == null) {
+            return ChassisTelemetry(false, -1, false, Double.NaN, Double.NaN, Double.NaN,
+                0.0, 0.0, Double.NaN, -1, Double.NaN)
+        }
+        // Pose (x, y, yaw em radianos -> graus).
+        var px = Double.NaN; var py = Double.NaN; var yawDeg = Double.NaN
+        invokeReturningObject(p, "getPose")?.let { pose ->
+            invokeReturningDouble(pose, "getX")?.let { px = it }
+            invokeReturningDouble(pose, "getY")?.let { py = it }
+            invokeReturningDouble(pose, "getYaw")?.let { yawDeg = Math.toDegrees(it) }
+        }
+        // Velocidade medida (RealTimeVelocity).
+        var vLin = 0.0; var vAng = 0.0
+        invokeReturningObject(p, "getRealTimeVelocity")?.let { rtv ->
+            invokeReturningDouble(rtv, "getLinearVelocity")?.let { vLin = it }
+            invokeReturningDouble(rtv, "getAngularVelocity")?.let { vAng = it }
+        }
+        // Qualidade de localização (0–100).
+        var loc = -1
+        invokeReturningObject(p, "getLocalizationQuality")?.let { q ->
+            (invokeReturningDouble(q, "getLocalizationQuality") ?: invokeReturningDouble(q, "getLevel"))
+                ?.let { loc = it.toInt() }
+        }
+        return ChassisTelemetry(
+            dcConnected = invokeReturningDouble(p, "getDCIsConnected")?.let { it != 0.0 } ?: false,
+            battery = batteryPercent(),
+            charging = (invokeReturningDouble(p, "getBatteryIsCharging") ?: 0.0) != 0.0,
+            poseX = px, poseY = py, poseYawDeg = yawDeg,
+            vLinear = vLin, vAngular = vAng,
+            frontCm = frontDistanceCm(),
+            localization = loc,
+            odometry = invokeReturningDouble(p, "getOdometry") ?: Double.NaN,
+        )
+    }
+
+    @Volatile private var frontCache = Double.NaN
+    @Volatile private var frontCacheAt = 0L
+
+    /**
+     * Distância frontal (cm) a partir do LaserScan: menor distância válida no setor
+     * frontal (|ângulo| < ~15°). NaN se o scan não estiver disponível.
+     *
+     * Com CACHE/THROTTLE (~5 Hz): o loop de controle a 20 Hz chama isto a cada tick, mas
+     * o scan só é buscado pela rede no máximo a cada 200 ms — evita inundar o canal 1445.
+     */
     fun frontDistanceCm(): Double {
         val p = platform ?: return Double.NaN
-        // Tenta leituras conhecidas (metros) e converte.
-        for (name in arrayOf("getFrontDistance", "getFrontObstacleDistance", "getMinFrontDistance")) {
-            val m = invokeReturningDouble(p, name)
-            if (m != null && !m.isNaN()) return m * 100.0
+        val now = System.currentTimeMillis()
+        if (now - frontCacheAt < 200L) return frontCache
+        frontCacheAt = now
+        @Suppress("UNCHECKED_CAST")
+        frontCache = try {
+            val scan = p.javaClass.getMethod("getLaserScan").invoke(p)
+            val pts = scan?.let { it.javaClass.getMethod("getLaserPoints").invoke(it) } as? List<Any?>
+            if (pts == null) {
+                Double.NaN
+            } else {
+                var minM = Double.MAX_VALUE
+                val setor = Math.toRadians(15.0)
+                for (pt in pts) {
+                    pt ?: continue
+                    val valido = (invokeReturningDouble(pt, "isValid") ?: 1.0) != 0.0
+                    if (!valido) continue
+                    val ang = invokeReturningDouble(pt, "getAngle") ?: continue
+                    if (kotlin.math.abs(ang) > setor) continue
+                    val dist = invokeReturningDouble(pt, "getDistance") ?: continue
+                    if (dist > 0.0 && dist < minM) minM = dist
+                }
+                if (minM == Double.MAX_VALUE) Double.NaN else minM * 100.0
+            }
+        } catch (t: Throwable) {
+            warnOnce("getLaserScan", t); Double.NaN
         }
-        return Double.NaN
+        return frontCache
     }
 
     /** Bateria em %, ou -1 se indisponível. */
     fun batteryPercent(): Int {
         val p = platform ?: return -1
-        val v = invokeReturningDouble(p, "getBatteryPercentage")
-            ?: invokeReturningDouble(p, "getBatteryPercent")
-        return v?.toInt() ?: -1
+        return invokeReturningDouble(p, "getBatteryPercentage")?.toInt() ?: -1
     }
 
-    /** Telemetria nativa do chassi (bateria/IMU) como JSON para republicar. */
+    /** Telemetria nativa do chassi como JSON para republicar em `ken/sensors/telemetry`. */
     fun telemetryJson(): JSONObject {
-        val json = JSONObject()
-        val battery = batteryPercent()
-        if (battery >= 0) json.put("battery", battery)
-
-        invokeReturningDouble(platform, "isCharging")?.let { json.put("charging", it != 0.0) }
-
-        // IMU (se exposto). Mantemos tolerante: só inclui o que existir.
-        val imu = JSONObject()
-        invokeReturningDouble(platform, "getYaw")?.let { imu.put("yaw", it) }
-        invokeReturningDouble(platform, "getPitch")?.let { imu.put("pitch", it) }
-        invokeReturningDouble(platform, "getRoll")?.let { imu.put("roll", it) }
-        if (imu.length() > 0) json.put("imu", imu)
-
-        return json
+        val t = readTelemetry()
+        return JSONObject().apply {
+            put("dc_connected", t.dcConnected)
+            if (t.battery >= 0) put("battery", t.battery)
+            put("charging", t.charging)
+            if (!t.poseX.isNaN() && !t.poseY.isNaN()) {
+                put("pose", JSONObject().apply {
+                    put("x", round3(t.poseX)); put("y", round3(t.poseY))
+                    if (!t.poseYawDeg.isNaN()) put("yaw_deg", round1(t.poseYawDeg))
+                })
+            }
+            put("v_measured", round3(t.vLinear))
+            put("w_measured", round3(t.vAngular))
+            if (!t.frontCm.isNaN()) put("front_cm", round1(t.frontCm))
+            if (t.localization >= 0) put("localization", t.localization)
+            if (!t.odometry.isNaN()) put("odometry", round3(t.odometry))
+        }
     }
+
+    private fun round3(v: Double) = Math.round(v * 1000.0) / 1000.0
+    private fun round1(v: Double) = Math.round(v * 10.0) / 10.0
+
 
     // ── Helpers de reflexão ───────────────────────────────────────────────────
 
@@ -402,6 +501,18 @@ class SlamwareChassis(
         // Tenta double e float.
         if (invoke(target, name, arrayOf(Double::class.javaPrimitiveType!!), arrayOf(value))) return true
         return invoke(target, name, arrayOf(Float::class.javaPrimitiveType!!), arrayOf(value.toFloat()))
+    }
+
+    /** Invoca um getter sem argumentos e retorna o objeto (ou null em erro/ausência). */
+    private fun invokeReturningObject(target: Any?, name: String): Any? {
+        val t = target ?: return null
+        return try {
+            t.javaClass.getMethod(name).invoke(t)
+        } catch (e: NoSuchMethodException) {
+            null
+        } catch (th: Throwable) {
+            warnOnce(name, th); null
+        }
     }
 
     private fun invokeReturningDouble(target: Any?, name: String): Double? {

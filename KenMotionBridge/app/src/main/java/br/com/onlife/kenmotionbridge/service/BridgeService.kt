@@ -177,34 +177,64 @@ class BridgeService : Service() {
         }
     }
 
-    /** Feedback + telemetria nativa a 1 Hz. */
+    /** Feedback + telemetria nativa a 1 Hz, com reconexão e robustez a erros. */
     private fun startFeedbackLoop() {
         feedbackJob = scope.launch {
             while (isActive) {
-                val frontCm = motion.frontCm
-                val battery = chassis.batteryPercent()
-                StatusBus.update { it.copy(batteryPct = battery) }
-
-                // ken/motion/feedback — resolve o "SEM SINAL".
-                val fb = JSONObject().apply {
-                    put("online", true)
-                    put("v", round3(motion.currentV))
-                    put("w", round3(motion.currentW))
-                    put("front_cm", if (frontCm.isNaN()) JSONObject.NULL else round1(frontCm))
-                    put("ts", System.currentTimeMillis())
+                // Todo o corpo é protegido: um erro de telemetria NÃO mata o loop para sempre.
+                try {
+                    publicarTelemetria()
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Erro no loop de telemetria (continuando): ${t.message}", t)
                 }
-                mqtt.publish(config.topicFeedback, fb.toString(), qos = 0, retained = false)
-
-                // ken/sensors/telemetry — telemetria nativa do SDK (bateria/IMU).
-                val tel = chassis.telemetryJson().apply { put("ts", System.currentTimeMillis()) }
-                if (tel.length() > 1) {
-                    mqtt.publish(config.topicTelemetry, tel.toString())
-                }
-
-                updateNotification()
                 delay(1000L)
             }
         }
+    }
+
+    private fun publicarTelemetria() {
+        val now = System.currentTimeMillis()
+
+        // Saúde do canal direto: se cremos estar conectados mas o DC caiu, reconectar.
+        if (chassis.connected && !chassis.dcConnected()) {
+            Log.w(TAG, "Canal Slamware caiu (getDCIsConnected=false) — reconectando…")
+            StatusBus.update { it.copy(sdkConnected = false, sdkError = "reconectando ao chassi…") }
+            chassis.connect()
+        }
+
+        val tel = chassis.readTelemetry()
+        val online = chassis.connected && tel.dcConnected
+
+        // Fonte ÚNICA de verdade: atualiza o StatusBus (UI lê daqui).
+        StatusBus.update {
+            it.copy(
+                sdkConnected = online,
+                batteryPct = tel.battery,
+                charging = tel.charging,
+                poseX = tel.poseX, poseY = tel.poseY, poseYawDeg = tel.poseYawDeg,
+                localization = tel.localization,
+                frontCm = if (tel.frontCm.isNaN()) motion.frontCm else tel.frontCm,
+                telemetryAt = if (online) now else it.telemetryAt,
+            )
+        }
+
+        // ken/motion/feedback — resolve o "SEM SINAL" no app web.
+        val fb = JSONObject().apply {
+            put("online", online)
+            put("v", round3(motion.currentV))
+            put("w", round3(motion.currentW))
+            put("front_cm", if (tel.frontCm.isNaN()) JSONObject.NULL else round1(tel.frontCm))
+            put("ts", now)
+        }
+        mqtt.publish(config.topicFeedback, fb.toString(), qos = 0, retained = false)
+
+        // ken/sensors/telemetry — telemetria nativa do SDK (pose/bateria/velocidade/localização).
+        if (online) {
+            val tj = chassis.telemetryJson().apply { put("ts", now) }
+            mqtt.publish(config.topicTelemetry, tj.toString())
+        }
+
+        updateNotification()
     }
 
     private fun updateNotification() {

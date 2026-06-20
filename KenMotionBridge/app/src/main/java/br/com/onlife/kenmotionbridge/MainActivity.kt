@@ -76,7 +76,17 @@ class MainActivity : AppCompatActivity() {
                     binding.txtFront.text = "Dist. frontal: " +
                         if (s.frontCm.isNaN()) "—" else "%.0f cm".format(s.frontCm)
                     binding.txtBattery.text = "Bateria: " +
-                        if (s.batteryPct < 0) "—" else "${s.batteryPct}%"
+                        (if (s.batteryPct < 0) "—" else "${s.batteryPct}%") +
+                        (if (s.charging) " ⚡" else "")
+                    binding.txtPose.text = if (s.poseX.isNaN()) "Pose: —" else
+                        "Pose: x=%.2f  y=%.2f  yaw=%.0f°".format(s.poseX, s.poseY, s.poseYawDeg)
+                    // Telemetria viva? "SEM SINAL" se a última leitura tem mais de 3 s.
+                    val idadeMs = System.currentTimeMillis() - s.telemetryAt
+                    binding.txtTelemetry.text = when {
+                        s.telemetryAt == 0L -> "Telemetria: —"
+                        idadeMs > 3000 -> "Telemetria: SEM SINAL (${idadeMs / 1000}s)"
+                        else -> "Telemetria: ativa  |  Loc: ${if (s.localization < 0) "—" else "${s.localization}%"}"
+                    }
                 }
             }
         }
