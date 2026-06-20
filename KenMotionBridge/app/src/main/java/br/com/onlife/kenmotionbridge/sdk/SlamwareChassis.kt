@@ -45,7 +45,9 @@ class SlamwareChassis(
 
         private const val PLATFORM_CLS = "com.slamtec.slamware.SlamwareCorePlatform"
         private const val RTV_CLS = "com.slamtec.slamware.robot.RealTimeVelocity"
-        private const val MOVE_DIR_CLS = "com.slamtec.slamware.robot.MoveDirection"
+        // Pacote correto confirmado via javap: com.slamtec.slamware.action.MoveDirection
+        private const val MOVE_DIR_CLS = "com.slamtec.slamware.action.MoveDirection"
+        private const val ROTATION_CLS = "com.slamtec.slamware.robot.Rotation"
     }
 
     @Volatile var connected: Boolean = false
@@ -106,15 +108,25 @@ class SlamwareChassis(
         }
     }
 
-    /** Conecta ao chassi. Tenta o binding CSJBot (se configurado) e a conexão Slamware direta. */
+    /**
+     * Conecta ao chassi. PRIORIZA a Abordagem 1 (conexão DIRETA ao Slamware via TCP 1445);
+     * só tenta o bind AIDL (Abordagem 2) como fallback se a conexão direta falhar.
+     */
     fun connect(): Boolean {
         classTried = PLATFORM_CLS
         sdkError = ""
         bound = false
         connected = false
         report()
-        if (config.useCsjbotBinding) bindCsjbot()
+
+        // Abordagem 1 (recomendada): conexão direta SlamwareCorePlatform.connect(ip, 1445).
         connectSlamware()
+
+        // Abordagem 2 (fallback): bind ao RobotSdkService só se a direta NÃO conectou.
+        if (!connected && config.useCsjbotBinding) {
+            Log.i(TAG, "Conexão direta falhou; tentando fallback de bind AIDL ao RobotSdkService")
+            bindCsjbot()
+        }
         report()
         return connected
     }
@@ -143,14 +155,17 @@ class SlamwareChassis(
         val ok = try {
             context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         } catch (se: SecurityException) {
-            sdkError = "bind negado — sem permissão para o serviço ${component.packageName} (${se.message})"
-            Log.e(TAG, sdkError)
+            // Não sobrescreve o motivo REAL da conexão direta (Abordagem 1), se houver.
+            setErrorIfEmpty("bind negado — sem permissão para o serviço ${component.packageName} (${se.message})")
+            Log.e(TAG, "bind negado: ${se.message}")
             return
         }
         if (!ok) {
-            sdkError = "RobotSdkService não encontrado/indisponível — ${component.packageName}/${component.shortClassName} " +
-                "não instalado, não exportado ou sem permissão (confira o app do RobotSDK e o <queries> no manifest)"
-            Log.e(TAG, sdkError)
+            setErrorIfEmpty(
+                "RobotSdkService não encontrado/indisponível — ${component.packageName}/${component.shortClassName} " +
+                    "não instalado, não exportado ou sem permissão (confira o app do RobotSDK e o <queries> no manifest)"
+            )
+            Log.e(TAG, "bindService retornou false para ${component.packageName}/${component.shortClassName}")
         } else {
             if (sdkError.isEmpty()) sdkError = "aguardando handshake do RobotSdkService ($CSJBOT_PKG)…"
             Log.i(TAG, "bindService solicitado (ok=true) em ${component.packageName}/${component.shortClassName}")
@@ -161,41 +176,54 @@ class SlamwareChassis(
         classTried = PLATFORM_CLS
         try {
             val cls = Class.forName(PLATFORM_CLS)
-            // SlamwareCorePlatform.connect(String ip, int port)
+            // SlamwareCorePlatform.connect(String ip, int port)  (estático)
             val connect: Method = cls.getMethod("connect", String::class.java, Int::class.javaPrimitiveType)
             platform = connect.invoke(null, config.chassisIp, config.chassisPort)
-            if (platform != null) {
+            // Confirma o canal direto (getDCIsConnected), se exposto.
+            val dcOk = (invokeReturningDouble(platform, "getDCIsConnected") ?: 1.0) != 0.0
+            if (platform != null && dcOk) {
                 connected = true
+                bound = false
                 sdkError = ""
-                Log.i(TAG, "Slamware conectado em ${config.chassisIp}:${config.chassisPort}")
+                Log.i(TAG, "Slamware CONECTADO (direto) em ${config.chassisIp}:${config.chassisPort}")
             } else {
-                setSlamwareErrorIfEmpty(
-                    "SlamwareCorePlatform.connect retornou null — chassi ${config.chassisIp}:${config.chassisPort} inacessível"
+                connected = false
+                setErrorIfEmpty(
+                    "Chassi inacessível — ${config.chassisIp}:${config.chassisPort} (conexão direta não estabelecida)"
                 )
             }
         } catch (t: Throwable) {
-            if (!connected) setSlamwareErrorIfEmpty(classifySlamware(t))
-            Log.e(TAG, "Falha Slamware: ${t.message}", t)
+            connected = false
+            setErrorIfEmpty(classifySlamware(t))
+            Log.e(TAG, "Falha Slamware (direto): ${t.message}", t)
         }
     }
 
-    /** Não sobrescreve um erro/estado do bind CSJBot (caminho primário do robô KEN). */
-    private fun setSlamwareErrorIfEmpty(msg: String) {
-        if (sdkError.isEmpty() || !config.useCsjbotBinding) sdkError = msg
+    /** Só grava o erro se ainda não houver um — preserva o motivo do caminho primário. */
+    private fun setErrorIfEmpty(msg: String) {
+        if (sdkError.isEmpty()) sdkError = msg
     }
 
     /** Traduz a falha da reflexão Slamware num motivo específico. */
     private fun classifySlamware(t: Throwable): String {
-        return when (val root = unwrap(t)) {
-            is ClassNotFoundException ->
+        val root = unwrap(t)
+        val simple = root.javaClass.simpleName
+        return when {
+            root is ClassNotFoundException ->
                 "ClassNotFound: $PLATFORM_CLS — RobotSDK (AAR) ausente no APK"
-            is NoSuchMethodException ->
+            root is NoSuchMethodException ->
                 "NoSuchMethod: $PLATFORM_CLS.connect(String,int) — versão do AAR diferente da esperada"
-            is UnsatisfiedLinkError ->
+            root is UnsatisfiedLinkError ->
                 "UnsatisfiedLinkError — biblioteca nativa (.so) do SDK ausente/ABI incompatível"
-            is java.net.ConnectException, is java.net.SocketTimeoutException ->
+            // Exceções do próprio Slamware (com.slamtec.slamware.exceptions.*).
+            simple.contains("ConnectionFail") || simple.contains("ConnectionTimeOut") ->
+                "Chassi inacessível — ${config.chassisIp}:${config.chassisPort} (verifique se o tablet está na rede do robô)"
+            simple.contains("Unauthorized") ->
+                "Não autorizado pelo chassi — sessão/login necessária (${root.message})"
+            root is java.net.ConnectException || root is java.net.SocketTimeoutException ||
+                root is java.net.UnknownHostException ->
                 "Chassi inacessível — ${config.chassisIp}:${config.chassisPort} (${root.message})"
-            else -> "Falha Slamware: ${root.javaClass.simpleName}: ${root.message}"
+            else -> "Falha Slamware: $simple: ${root.message}"
         }
     }
 
@@ -266,23 +294,47 @@ class SlamwareChassis(
         }
     }
 
-    // ── Movimentos discretos ────────────────────────────────────────────────
+    // ── Movimentos discretos (Abordagem 1: direto via SlamwareCorePlatform) ───
 
     enum class Dir { FORWARD, BACKWARD, TURN_LEFT, TURN_RIGHT }
 
-    fun moveBy(dir: Dir) {
-        val p = platform ?: return
-        try {
+    /** Última ação de movimento (IMoveAction) para permitir cancelamento. */
+    @Volatile private var lastAction: Any? = null
+
+    /** Move o chassi numa direção discreta: platform.moveBy(MoveDirection). */
+    fun moveBy(dir: Dir): Boolean {
+        val p = platform ?: return false
+        return try {
             val moveDirCls = Class.forName(MOVE_DIR_CLS)
             // MoveDirection.valueOf("FORWARD" | "BACKWARD" | "TURN_LEFT" | "TURN_RIGHT")
             val enumVal = moveDirCls.getMethod("valueOf", String::class.java).invoke(null, dir.name)
-            invoke(p, "moveBy", arrayOf(moveDirCls), arrayOf(enumVal))
+            lastAction = p.javaClass.getMethod("moveBy", moveDirCls).invoke(p, enumVal)
+            Log.i(TAG, "moveBy(${dir.name}) enviado ao chassi")
+            true
         } catch (t: Throwable) {
-            warnOnce("moveBy", t)
+            warnOnce("moveBy", t); false
         }
     }
 
+    /** Gira o chassi por um ângulo (graus): platform.rotate(Rotation(yawRad)). */
+    fun rotate(graus: Float): Boolean {
+        val p = platform ?: return false
+        return try {
+            val rotCls = Class.forName(ROTATION_CLS)
+            val yawRad = Math.toRadians(graus.toDouble()).toFloat()
+            val rotation = rotCls.getConstructor(Float::class.javaPrimitiveType).newInstance(yawRad)
+            lastAction = p.javaClass.getMethod("rotate", rotCls).invoke(p, rotation)
+            Log.i(TAG, "rotate($graus°) enviado ao chassi")
+            true
+        } catch (t: Throwable) {
+            warnOnce("rotate", t); false
+        }
+    }
+
+    /** Cancela o movimento em andamento (IMoveAction.cancel) e tenta cancelAction no platform. */
     fun cancelAction() {
+        lastAction?.let { act -> runCatching { act.javaClass.getMethod("cancel").invoke(act) } }
+        lastAction = null
         val p = platform ?: return
         if (!invoke(p, "cancelAction")) invoke(p, "CancelAction")
     }

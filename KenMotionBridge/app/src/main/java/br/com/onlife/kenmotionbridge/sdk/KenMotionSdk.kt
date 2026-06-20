@@ -134,10 +134,18 @@ class KenMotionSdk(private val chassis: SlamwareChassis? = null) {
         val v = velocidade.coerceIn(0f, VELOCIDADE_MAX)
         Log.i(TAG, "Chamado $api com velocidade=$v duracaoMs=$duracaoMs")
         if (!garantirConectado(api)) return
+
+        // Abordagem 1 (preferida): movimento DIRETO via SlamwareCorePlatform.moveBy(MoveDirection).
+        if (chassis?.connected == true) {
+            val dir = if (metodoSdk == "moveForward") SlamwareChassis.Dir.FORWARD else SlamwareChassis.Dir.BACKWARD
+            Log.i(TAG, "Enviando comando de movimento ao robô (direto Slamware): moveBy($dir)")
+            if (chassis.moveBy(dir)) { agendarParadaSeNecessario(duracaoMs); return }
+        }
+
+        // Fallback: RobotSDK CSJBot (Robot/ClientReqProxy).
         val alvo = proxy ?: robot ?: return
-        // Ajusta a velocidade (se o método existir) e dispara o movimento discreto.
         invokeFloat(alvo, "setSpeed", v)
-        Log.i(TAG, "Enviando comando de movimento ao robô: $metodoSdk (v=$v)")
+        Log.i(TAG, "Enviando comando de movimento ao robô (CSJBot): $metodoSdk (v=$v)")
         if (!invoke(robot ?: alvo, metodoSdk, emptyArray(), emptyArray())) {
             Log.e(TAG, "Erro ao enviar comando: método '$metodoSdk' indisponível no Robot")
         }
@@ -147,16 +155,31 @@ class KenMotionSdk(private val chassis: SlamwareChassis? = null) {
     private fun comandoRotacao(api: String, contInuo: String, angulo: Int?, sinalAngulo: Int, velocidade: Float?) {
         Log.i(TAG, "Chamado $api com angulo=$angulo velocidade=$velocidade")
         if (!garantirConectado(api)) return
+
+        // Abordagem 1 (preferida): rotação DIRETA via SlamwareCorePlatform.
+        if (chassis?.connected == true) {
+            if (angulo != null) {
+                val graus = (sinalAngulo * kotlin.math.abs(angulo)).toFloat()
+                Log.i(TAG, "Enviando comando de movimento ao robô (direto Slamware): rotate($graus°)")
+                if (chassis.rotate(graus)) return
+            } else {
+                val dir = if (sinalAngulo > 0) SlamwareChassis.Dir.TURN_LEFT else SlamwareChassis.Dir.TURN_RIGHT
+                Log.i(TAG, "Enviando comando de movimento ao robô (direto Slamware): moveBy($dir)")
+                if (chassis.moveBy(dir)) return
+            }
+        }
+
+        // Fallback: RobotSDK CSJBot.
         val alvo = proxy ?: robot ?: return
         if (velocidade != null) invokeFloat(alvo, "setAngularVelocity", velocidade.coerceIn(0f, VELOCIDADE_ANGULAR_MAX))
         if (angulo != null) {
             val graus = sinalAngulo * kotlin.math.abs(angulo)
-            Log.i(TAG, "Enviando comando de movimento ao robô: goAngle($graus)")
+            Log.i(TAG, "Enviando comando de movimento ao robô (CSJBot): goAngle($graus)")
             if (!invokeInt(alvo, "goAngle", graus) && !invokeInt(alvo, "moveAngle", graus)) {
                 Log.e(TAG, "Erro ao enviar comando: goAngle/moveAngle indisponíveis")
             }
         } else {
-            Log.i(TAG, "Enviando comando de movimento ao robô: $contInuo (contínuo)")
+            Log.i(TAG, "Enviando comando de movimento ao robô (CSJBot): $contInuo (contínuo)")
             if (!invoke(robot ?: alvo, contInuo, emptyArray(), emptyArray())) {
                 Log.e(TAG, "Erro ao enviar comando: método '$contInuo' indisponível")
             }
@@ -165,8 +188,11 @@ class KenMotionSdk(private val chassis: SlamwareChassis? = null) {
 
     /** Verifica sessão ativa antes de aceitar comandos (requisito de segurança). */
     private fun garantirConectado(api: String): Boolean {
+        // Aceita se o canal DIRETO Slamware está conectado (Abordagem 1)…
+        if (chassis?.connected == true) return true
+        // …ou se a sessão do RobotSDK CSJBot está ativa (Abordagem 2).
         if (!inicializado) {
-            Log.e(TAG, "Erro ao enviar comando: $api ignorado — SDK não inicializado (chame inicializarConexaoRobo)")
+            Log.e(TAG, "Erro ao enviar comando: $api ignorado — sem conexão (chassi direto OFF e SDK não inicializado)")
             return false
         }
         if (!estaConectado()) {
