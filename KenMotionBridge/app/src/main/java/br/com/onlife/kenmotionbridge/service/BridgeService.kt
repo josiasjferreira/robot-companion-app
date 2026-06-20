@@ -18,6 +18,7 @@ import br.com.onlife.kenmotionbridge.R
 import br.com.onlife.kenmotionbridge.StatusBus
 import br.com.onlife.kenmotionbridge.motion.MotionController
 import br.com.onlife.kenmotionbridge.mqtt.MqttManager
+import br.com.onlife.kenmotionbridge.sdk.KenMotionSdk
 import br.com.onlife.kenmotionbridge.sdk.SlamwareChassis
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +52,7 @@ class BridgeService : Service() {
 
     private lateinit var config: BridgeConfig
     private lateinit var chassis: SlamwareChassis
+    private lateinit var motionSdk: KenMotionSdk
     private lateinit var motion: MotionController
     private lateinit var mqtt: MqttManager
     private var wakeLock: PowerManager.WakeLock? = null
@@ -108,7 +110,9 @@ class BridgeService : Service() {
                 )
             }
         }
-        motion = MotionController(chassis, config)
+        // Camada central de movimento do chassi (RobotSDK CSJBot).
+        motionSdk = KenMotionSdk(chassis)
+        motion = MotionController(chassis, config, motionSdk)
         mqtt = MqttManager(
             config = config,
             onConnectionChanged = { up, err ->
@@ -127,6 +131,7 @@ class BridgeService : Service() {
     private fun connectAll() {
         scope.launch {
             chassis.connect()
+            motionSdk.inicializarConexaoRobo()
             mqtt.connect()
         }
     }
@@ -140,6 +145,7 @@ class BridgeService : Service() {
             config = BridgeConfig.load(this@BridgeService)
             buildPipeline()
             chassis.connect()
+            motionSdk.inicializarConexaoRobo()
             mqtt.connect()
         }
     }
@@ -247,6 +253,7 @@ class BridgeService : Service() {
         loopJob?.cancel()
         feedbackJob?.cancel()
         runCatching { motion.stop() }
+        runCatching { motionSdk.liberar() }
         runCatching { mqtt.disconnect() }
         runCatching { chassis.disconnect() }
         runCatching { wakeLock?.release() }
