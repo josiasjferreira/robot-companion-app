@@ -19,8 +19,8 @@
   },
 
   "chassis": {
-    "_comment": "Endereço do chassi Slamware (Slamware via TCP 1445). Normalmente 192.168.11.1.",
-    "ip": "192.168.11.1",
+    "_comment": "Endereço do chassi Slamware (Slamware via TCP 1445). Confirmado nos manuais e no robot_studio.apk: 192.168.99.2:1445.",
+    "ip": "192.168.99.2",
     "port": 1445,
     "useCsjbotBinding": true
   },

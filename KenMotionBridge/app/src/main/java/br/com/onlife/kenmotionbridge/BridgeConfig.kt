@@ -108,7 +108,7 @@ data class BridgeConfig(
                 topicCmd = topics.optString("cmd", "ken/motion/cmd"),
                 topicFeedback = topics.optString("feedback", "ken/motion/feedback"),
                 topicTelemetry = topics.optString("telemetry", "ken/sensors/telemetry"),
-                chassisIp = chassis.optString("ip", "192.168.11.1"),
+                chassisIp = chassis.optString("ip", "192.168.99.2"),
                 chassisPort = chassis.optInt("port", 1445),
                 useCsjbotBinding = chassis.optBoolean("useCsjbotBinding", true),
                 vMax = motion.optDouble("vMax", 0.4),
