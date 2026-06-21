@@ -243,6 +243,7 @@ class BridgeService : Service() {
                 if (!chassis.frontCm.isNaN()) put("distance_front_cm", round1(chassis.frontCm))
                 put("motion_mode", chassis.motionMode)
                 put("naviReady", chassis.naviReady)
+                if (chassis.reStatus >= 0) put("relocation_status", chassis.reStatus)
             }
             mqtt.publish(config.topicTelemetry, tj.toString())
         }

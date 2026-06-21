@@ -48,8 +48,23 @@ class MotionController(
             }
             "stop" -> stop()
             "chassis" -> handleChassis(json)
+            "raw" -> handleRaw(json)
             else -> Log.w(TAG, "Tipo de comando desconhecido: $raw")
         }
+    }
+
+    /**
+     * Passagem direta: encaminha um envelope { "msg_id":..., ...campos } ao SDK via AIDL.
+     * Use com {"type":"raw","msg_id":"ROBOT_BODY_CTRL_CMD","part":..,"direction":..,"angle":..,"speed":..}
+     * ou qualquer outro msg_id do RobotSDK. O campo "type" é removido antes de enviar.
+     */
+    private fun handleRaw(json: JSONObject) {
+        val out = JSONObject()
+        for (k in json.keys()) if (k != "type") out.put(k, json.get(k))
+        if (!out.has("msg_id")) { Log.w(TAG, "raw sem msg_id ignorado"); return }
+        lastCommandLabel = "raw ${out.optString("msg_id")}"
+        lastCommandAt = System.currentTimeMillis()
+        chassis.sendJson(out.toString())
     }
 
     /** Converte (x,y) na direção DOMINANTE e envia o comando discreto correspondente. */

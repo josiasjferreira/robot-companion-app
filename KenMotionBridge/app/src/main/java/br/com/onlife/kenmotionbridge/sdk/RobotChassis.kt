@@ -32,6 +32,7 @@ class RobotChassis(
         private const val TAG = "RobotChassis"
         private const val SDK_PKG = "com.csjbot.robotsdk.ten"
         private const val SDK_SERVICE = "com.csjbot.robotsdk.service.RobotSdkService"
+        private const val SDK_ACTION = "com.csjbot.robotsdkservice.startservice"
 
         /** Instância ativa para o AIDLClientService rotear os callbacks recebidos do robô. */
         @Volatile var active: RobotChassis? = null
@@ -51,6 +52,7 @@ class RobotChassis(
     @Volatile var frontCm: Double = Double.NaN; private set
     @Volatile var motionMode: Int = -1; private set
     @Volatile var naviReady: Boolean = false; private set
+    @Volatile var reStatus: Int = -1; private set   // status de relocalização
     @Volatile var lastMsgAt: Long = 0L; private set
 
     /** Último JSON enviado/recebido, para exibir na tela. */
@@ -87,7 +89,8 @@ class RobotChassis(
         active = this
         sdkError = ""; bound = false; connected = false
         report()
-        val intent = Intent().apply { setClassName(SDK_PKG, SDK_SERVICE) }
+        // Ação + componente explícito (bind explícito é exigido no Android 5+).
+        val intent = Intent(SDK_ACTION).apply { setClassName(SDK_PKG, SDK_SERVICE) }
         runCatching { context.startService(intent) }
             .onFailure { Log.w(TAG, "startService falhou: ${it.message}") }
         val ok = try {
@@ -178,6 +181,9 @@ class RobotChassis(
             "NAVI_ROBOT_STATES_NTF" -> {
                 if (o.has("naviReady")) naviReady = o.optBoolean("naviReady")
                 if (o.has("motion_mode")) motionMode = o.optInt("motion_mode")
+            }
+            "NAVI_ROBOT_RELOCATION_STATES_NTF" -> {
+                if (o.has("reStatus")) reStatus = o.optInt("reStatus")
             }
             "ROBOT_GET_POWERTIME_RSP" -> readBattery(o)
             else -> {
