@@ -89,22 +89,54 @@ class RobotChassis(
         active = this
         sdkError = ""; bound = false; connected = false
         report()
-        // Ação + componente explícito (bind explícito é exigido no Android 5+).
-        val intent = Intent(SDK_ACTION).apply { setClassName(SDK_PKG, SDK_SERVICE) }
+
+        val pm = context.packageManager
+        // 1) Descobre o serviço pela AÇÃO (caso o pacote/classe difiram neste tablet).
+        val discovered = runCatching {
+            pm.queryIntentServices(Intent(SDK_ACTION), 0)
+        }.getOrNull().orEmpty().firstOrNull()?.serviceInfo?.let { ComponentName(it.packageName, it.name) }
+
+        val component = discovered ?: ComponentName(SDK_PKG, SDK_SERVICE)
+        if (discovered != null) {
+            Log.i(TAG, "Serviço descoberto pela ação: ${component.flattenToShortString()}")
+        }
+
+        val intent = Intent(SDK_ACTION).apply { component?.let { setClassName(it.packageName, it.className) } }
         runCatching { context.startService(intent) }
             .onFailure { Log.w(TAG, "startService falhou: ${it.message}") }
         val ok = try {
             context.bindService(intent, conn, Context.BIND_AUTO_CREATE)
         } catch (se: SecurityException) {
-            sdkError = "bind negado — sem permissão para $SDK_PKG (${se.message})"
+            sdkError = "bind negado — sem permissão para ${component.packageName} (${se.message})"
             Log.e(TAG, sdkError); report(); return false
         }
         if (!ok) {
-            sdkError = "RobotSdkService não encontrado/indisponível — $SDK_PKG/$SDK_SERVICE " +
-                "(confira o app do RobotSDK e o <queries> no manifest)"
+            sdkError = "RobotSdkService não encontrado — ${component.flattenToShortString()}. " +
+                "Candidatos no aparelho: ${discoverCandidates()}"
             Log.e(TAG, sdkError); report()
         }
         return connected
+    }
+
+    /** Diagnóstico (sem adb): lista serviços que respondem à ação e pacotes csjbot/robot/slam. */
+    private fun discoverCandidates(): String {
+        val pm = context.packageManager
+        val sb = StringBuilder()
+        // Serviços que respondem à ação de start.
+        runCatching {
+            pm.queryIntentServices(Intent(SDK_ACTION), 0).forEach {
+                sb.append("[svc ${it.serviceInfo.packageName}/${it.serviceInfo.name}] ")
+            }
+        }
+        // Pacotes instalados com palavras-chave do fabricante.
+        runCatching {
+            pm.getInstalledPackages(0).map { it.packageName }
+                .filter { p -> listOf("csjbot", "robotsdk", "slam", "csjrobot", ".ten").any { p.contains(it, true) } }
+                .forEach { sb.append("[pkg $it] ") }
+        }
+        val out = sb.toString().ifBlank { "nenhum (verifique se o app do RobotSDK está instalado / QUERY_ALL_PACKAGES)" }
+        Log.i(TAG, "Candidatos: $out")
+        return out.take(300)
     }
 
     fun disconnect() {

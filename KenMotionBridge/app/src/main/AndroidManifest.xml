@@ -10,6 +10,8 @@
     <!-- Necessário em Android 13+ para exibir a notificação do foreground service -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Diagnóstico: listar pacotes/serviços do RobotSDK instalados (descobrir nome real). -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <!-- Visibilidade de pacotes (Android 11+/targetSdk 34): permite resolver e bindar
          o serviço do RobotSDK (CSJBot) por ação/componente, mesmo estando em outro app.
