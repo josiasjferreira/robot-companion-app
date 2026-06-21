@@ -77,23 +77,6 @@
         <TextView android:id="@+id/txtBattery" style="@style/StatusLine" android:text="Bateria: —" />
         <TextView android:id="@+id/txtPose" style="@style/StatusLine" android:text="Pose: —" />
         <TextView android:id="@+id/txtTelemetry" style="@style/StatusLine" android:text="Telemetria: —" />
-        <TextView
-            android:id="@+id/txtSdkTx"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textColor="#8B98A5"
-            android:textSize="11sp"
-            android:fontFamily="monospace"
-            android:text="TX: —" />
-        <TextView
-            android:id="@+id/txtSdkRx"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="4dp"
-            android:textColor="#8B98A5"
-            android:textSize="11sp"
-            android:fontFamily="monospace"
-            android:text="RX: —" />
 
         <LinearLayout
             android:layout_width="match_parent"

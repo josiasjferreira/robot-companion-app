@@ -19,7 +19,7 @@ import br.com.onlife.kenmotionbridge.StatusBus
 import br.com.onlife.kenmotionbridge.motion.MotionController
 import br.com.onlife.kenmotionbridge.mqtt.MqttManager
 import br.com.onlife.kenmotionbridge.sdk.KenMotionSdk
-import br.com.onlife.kenmotionbridge.sdk.RobotChassis
+import br.com.onlife.kenmotionbridge.sdk.SlamwareChassis
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,7 +51,7 @@ class BridgeService : Service() {
     private var feedbackJob: Job? = null
 
     private lateinit var config: BridgeConfig
-    private lateinit var chassis: RobotChassis
+    private lateinit var chassis: SlamwareChassis
     private lateinit var motionSdk: KenMotionSdk
     private lateinit var motion: MotionController
     private lateinit var mqtt: MqttManager
@@ -100,17 +100,17 @@ class BridgeService : Service() {
         StatusBus.update {
             it.copy(brokerUser = config.mqttUser, brokerPassLen = config.mqttPassword.length)
         }
-        chassis = RobotChassis(this, config) { connected, error, bnd, info ->
+        chassis = SlamwareChassis(this, config) { connected, error, bnd, classTried ->
             StatusBus.update {
                 it.copy(
                     sdkConnected = connected,
                     sdkError = error,
                     sdkBound = bnd,
-                    sdkClassTried = info,
+                    sdkClassTried = classTried,
                 )
             }
         }
-        // Camada central de movimento do chassi (AIDL com o RobotSdkService).
+        // Camada central de movimento do chassi (RobotSDK CSJBot).
         motionSdk = KenMotionSdk(chassis)
         motion = MotionController(chassis, config, motionSdk)
         mqtt = MqttManager(
@@ -192,35 +192,29 @@ class BridgeService : Service() {
         }
     }
 
-    private var lastPoll = 0L
-    private var lastReconnect = 0L
-
     private fun publicarTelemetria() {
         val now = System.currentTimeMillis()
-        val online = chassis.connected
 
-        // Reconexão leve: se não conectou (bind caiu / sem connectToSDKSucceed), tenta a cada 5 s.
-        if (!online && now - lastReconnect > 5000L) {
-            lastReconnect = now
-            Log.w(TAG, "Chassi desconectado — tentando reconectar via AIDL…")
+        // Saúde do canal direto: se cremos estar conectados mas o DC caiu, reconectar.
+        if (chassis.connected && !chassis.dcConnected()) {
+            Log.w(TAG, "Canal Slamware caiu (getDCIsConnected=false) — reconectando…")
+            StatusBus.update { it.copy(sdkConnected = false, sdkError = "reconectando ao chassi…") }
             chassis.connect()
         }
 
-        // Polling leve de telemetria (sonar + energia) enquanto conectado.
-        if (online && now - lastPoll >= config.telemetryPollMs) {
-            lastPoll = now
-            chassis.requestTelemetry()
-        }
+        val tel = chassis.readTelemetry()
+        val online = chassis.connected && tel.dcConnected
 
         // Fonte ÚNICA de verdade: atualiza o StatusBus (UI lê daqui).
         StatusBus.update {
             it.copy(
                 sdkConnected = online,
-                batteryPct = chassis.batteryPct,
-                frontCm = if (chassis.frontCm.isNaN()) motion.frontCm else chassis.frontCm,
-                telemetryAt = if (chassis.telemetryFresh()) chassis.lastMsgAt else it.telemetryAt,
-                sdkTx = chassis.lastTx,
-                sdkRx = chassis.lastRx,
+                batteryPct = tel.battery,
+                charging = tel.charging,
+                poseX = tel.poseX, poseY = tel.poseY, poseYawDeg = tel.poseYawDeg,
+                localization = tel.localization,
+                frontCm = if (tel.frontCm.isNaN()) motion.frontCm else tel.frontCm,
+                telemetryAt = if (online) now else it.telemetryAt,
             )
         }
 
@@ -229,22 +223,14 @@ class BridgeService : Service() {
             put("online", online)
             put("v", round3(motion.currentV))
             put("w", round3(motion.currentW))
-            put("front_cm", if (chassis.frontCm.isNaN()) JSONObject.NULL else round1(chassis.frontCm))
+            put("front_cm", if (tel.frontCm.isNaN()) JSONObject.NULL else round1(tel.frontCm))
             put("ts", now)
         }
         mqtt.publish(config.topicFeedback, fb.toString(), qos = 0, retained = false)
 
-        // ken/sensors/telemetry — telemetria do chassi via AIDL.
+        // ken/sensors/telemetry — telemetria nativa do SDK (pose/bateria/velocidade/localização).
         if (online) {
-            val tj = JSONObject().apply {
-                put("ts", now)
-                put("source", "chassi")
-                if (chassis.batteryPct >= 0) put("battery_pct", chassis.batteryPct)
-                if (!chassis.frontCm.isNaN()) put("distance_front_cm", round1(chassis.frontCm))
-                put("motion_mode", chassis.motionMode)
-                put("naviReady", chassis.naviReady)
-                if (chassis.reStatus >= 0) put("relocation_status", chassis.reStatus)
-            }
+            val tj = chassis.telemetryJson().apply { put("ts", now) }
             mqtt.publish(config.topicTelemetry, tj.toString())
         }
 

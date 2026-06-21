@@ -29,13 +29,6 @@ class SettingsActivity : AppCompatActivity() {
         binding.editUser.setText(cfg.mqttUser)
         binding.editPass.setText(cfg.mqttPassword)
 
-        // Comandos AIDL de movimento (msg_id + inteiros das direções).
-        binding.editMoveMsg.setText(cfg.moveMsgId)
-        binding.editDirFwd.setText(cfg.dirForward.toString())
-        binding.editDirBack.setText(cfg.dirBackward.toString())
-        binding.editDirLeft.setText(cfg.dirLeft.toString())
-        binding.editDirRight.setText(cfg.dirRight.toString())
-
         binding.btnSave.setOnClickListener { saveAndRestart() }
         binding.btnCancel.setOnClickListener { finish() }
     }
@@ -51,16 +44,6 @@ class SettingsActivity : AppCompatActivity() {
         val pass = binding.editPass.text.toString().trim()
 
         BridgeConfig.saveSettings(this, host, port, user, pass)
-
-        // Comandos AIDL de movimento (configuráveis na UI; default vazio mantém o do asset).
-        val moveMsg = binding.editMoveMsg.text.toString().trim().ifEmpty { "NAVI_ROBOT_MOVE_REQ" }
-        BridgeConfig.saveMotionCmd(
-            this, moveMsg,
-            binding.editDirFwd.text.toString().trim().toIntOrNull() ?: 0,
-            binding.editDirBack.text.toString().trim().toIntOrNull() ?: 1,
-            binding.editDirLeft.text.toString().trim().toIntOrNull() ?: 2,
-            binding.editDirRight.text.toString().trim().toIntOrNull() ?: 3,
-        )
 
         // Reinicia a ponte para aplicar imediatamente (reconecta ao broker).
         ContextCompat.startForegroundService(

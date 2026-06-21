@@ -19,20 +19,10 @@
   },
 
   "chassis": {
-    "_comment": "Controle via AIDL com o RobotSdkService (com.csjbot.robotsdk.ten). ip/port ficam só por referência; o movimento vai por JSON. Ajuste moveMsgId e as direções na tela de Configurações (valores exatos confirmados em runtime).",
+    "_comment": "Endereço do chassi Slamware (Slamware via TCP 1445). Confirmado nos manuais e no robot_studio.apk: 192.168.99.2:1445.",
     "ip": "192.168.99.2",
     "port": 1445,
-    "useCsjbotBinding": true,
-    "moveMsgId": "NAVI_ROBOT_MOVE_REQ",
-    "stopMsgId": "NAVI_ROBOT_MOVE_REQ",
-    "dirForward": 0,
-    "dirBackward": 1,
-    "dirLeft": 2,
-    "dirRight": 3,
-    "dirStop": -1,
-    "sonarReqId": "GET_SONAR_DISTANCE_REQ",
-    "powerReqId": "ROBOT_GET_POWERTIME_REQ",
-    "telemetryPollMs": 2500
+    "useCsjbotBinding": true
   },
 
   "motion": {

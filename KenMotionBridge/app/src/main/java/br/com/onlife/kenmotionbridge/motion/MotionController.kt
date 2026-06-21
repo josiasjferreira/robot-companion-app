@@ -3,37 +3,43 @@ package br.com.onlife.kenmotionbridge.motion
 import android.util.Log
 import br.com.onlife.kenmotionbridge.BridgeConfig
 import br.com.onlife.kenmotionbridge.sdk.KenMotionSdk
-import br.com.onlife.kenmotionbridge.sdk.RobotChassis
+import br.com.onlife.kenmotionbridge.sdk.SlamwareChassis
 import org.json.JSONObject
 import kotlin.math.abs
+import kotlin.math.sign
 
 /**
- * Traduz comandos do app web (MQTT `ken/motion/cmd`) em comandos DISCRETOS do chassi,
- * enviados como JSON via AIDL ([RobotChassis]). Não há mais velocidade em tempo real
- * (Slamware in-process foi removido); o RobotSdkService é o dono do chassi.
+ * Traduz comandos do app web em velocidade do chassi, com:
+ *  - deadzone, rampa suave e tetos RÍGIDOS de velocidade;
+ *  - watchdog (zera se nenhum comando chegar em watchdogMs);
+ *  - segurança de obstáculo frontal (< safeFrontCm e v>0 -> v=0).
  *
- *  - `joystick` → direção dominante (frente/trás/esq/dir) → RobotChassis.move(dir)
- *  - `stop`     → RobotChassis.sendStop()
- *  - `chassis`  → comandos de alto nível via [KenMotionSdk]
+ * O loop de controle (~controlHz) chama [tick]; o MQTT chama [onCommand].
  *
- * Watchdog: se nenhum joystick chegar em [BridgeConfig.watchdogMs], envia stop uma vez.
+ * Caminhos de movimento:
+ *  - `joystick`/`stop`: velocidade em tempo real via [SlamwareChassis] (teleop contínuo).
+ *  - `chassis`: comandos de ALTO NÍVEL (frente/trás/girar/ângulo) centralizados no
+ *    [KenMotionSdk] (RobotSDK CSJBot). Mantém o joystick intacto.
  */
 class MotionController(
-    private val chassis: RobotChassis,
+    private val chassis: SlamwareChassis,
     private val config: BridgeConfig,
+    /** Camada central de movimento do chassi (RobotSDK). Opcional p/ não quebrar testes. */
     private val motionSdk: KenMotionSdk? = null,
 ) {
     companion object { private const val TAG = "MotionController" }
 
-    // Estado exposto para feedback/telemetria e UI.
+    // Alvos vindos do joystick (já normalizados, antes da rampa).
+    @Volatile private var targetV = 0.0
+    @Volatile private var targetW = 0.0
+
+    // Velocidade corrente (saída da rampa) — exposta para o feedback.
     @Volatile var currentV = 0.0; private set
     @Volatile var currentW = 0.0; private set
+
     @Volatile var frontCm = Double.NaN; private set
     @Volatile var lastCommandLabel = "—"; private set
-
     @Volatile private var lastCommandAt = 0L
-    @Volatile private var moving = false
-    @Volatile private var lastDir: RobotChassis.Dir? = null
 
     /** Processa um payload JSON de `ken/motion/cmd`. Tolerante a payload ruim. */
     fun onCommand(raw: String) {
@@ -44,95 +50,107 @@ class MotionController(
             "joystick" -> {
                 val x = clamp(json.optDouble("x", 0.0), -1.0, 1.0)
                 val y = clamp(json.optDouble("y", 0.0), -1.0, 1.0)
-                applyJoystick(x, y)
+                val speed = clamp(json.optDouble("speed", 0.0), 0.0, 100.0) / 100.0
+                val boost = json.optBoolean("boost", false)
+                applyJoystick(x, y, speed, boost)
+                lastCommandLabel = "joystick x=%.2f y=%.2f s=%d%s"
+                    .format(x, y, (speed * 100).toInt(), if (boost) " boost" else "")
+                lastCommandAt = System.currentTimeMillis()
             }
             "stop" -> stop()
             "chassis" -> handleChassis(json)
-            "raw" -> handleRaw(json)
             else -> Log.w(TAG, "Tipo de comando desconhecido: $raw")
         }
     }
 
     /**
-     * Passagem direta: encaminha um envelope { "msg_id":..., ...campos } ao SDK via AIDL.
-     * Use com {"type":"raw","msg_id":"ROBOT_BODY_CTRL_CMD","part":..,"direction":..,"angle":..,"speed":..}
-     * ou qualquer outro msg_id do RobotSDK. O campo "type" é removido antes de enviar.
+     * Comandos de ALTO NÍVEL do chassi, centralizados no [KenMotionSdk].
+     * Formato: { "type":"chassis", "action":"frente|tras|esquerda|direita|parar",
+     *            "speed":<m/s opcional>, "angle":<graus opcional>, "durationMs":<opcional> }
      */
-    private fun handleRaw(json: JSONObject) {
-        val out = JSONObject()
-        for (k in json.keys()) if (k != "type") out.put(k, json.get(k))
-        if (!out.has("msg_id")) { Log.w(TAG, "raw sem msg_id ignorado"); return }
-        lastCommandLabel = "raw ${out.optString("msg_id")}"
-        lastCommandAt = System.currentTimeMillis()
-        chassis.sendJson(out.toString())
-    }
-
-    /** Converte (x,y) na direção DOMINANTE e envia o comando discreto correspondente. */
-    private fun applyJoystick(x: Double, y: Double) {
-        val ax = abs(x); val ay = abs(y)
-        if (ax < config.deadzone && ay < config.deadzone) { stop(); return }
-
-        val angSign = if (config.invertAngular) -1.0 else 1.0
-        val dir = if (ay >= ax) {
-            if (y >= 0) RobotChassis.Dir.FORWARD else RobotChassis.Dir.BACKWARD
-        } else {
-            if (x * angSign >= 0) RobotChassis.Dir.LEFT else RobotChassis.Dir.RIGHT
-        }
-
-        lastCommandAt = System.currentTimeMillis()
-        // Só reenvia ao chassi quando a direção muda (evita inundar a 1445).
-        if (dir != lastDir || !moving) {
-            chassis.move(dir)
-            lastDir = dir
-            moving = true
-        }
-        // Velocidade nominal só para feedback/UI (não há leitura contínua via AIDL).
-        currentV = when (dir) {
-            RobotChassis.Dir.FORWARD -> config.vMax
-            RobotChassis.Dir.BACKWARD -> -config.vMax
-            else -> 0.0
-        }
-        currentW = when (dir) {
-            RobotChassis.Dir.LEFT -> config.wMax
-            RobotChassis.Dir.RIGHT -> -config.wMax
-            else -> 0.0
-        }
-        lastCommandLabel = "joystick → ${dir.name}"
-    }
-
-    fun stop() {
-        if (moving || lastDir != null) chassis.sendStop()
-        currentV = 0.0; currentW = 0.0
-        moving = false; lastDir = null
-        lastCommandLabel = "stop"
-        lastCommandAt = System.currentTimeMillis()
-    }
-
-    /** Comandos de alto nível, centralizados no [KenMotionSdk]. */
     private fun handleChassis(json: JSONObject) {
-        val sdk = motionSdk ?: run { Log.w(TAG, "Comando 'chassis' sem KenMotionSdk"); return }
+        val sdk = motionSdk
+        if (sdk == null) {
+            Log.w(TAG, "Comando 'chassis' ignorado: KenMotionSdk não disponível")
+            return
+        }
         val action = json.optString("action")
+        val speed = json.optDouble("speed", KenMotionSdk.VELOCIDADE_PADRAO.toDouble()).toFloat()
+        val angle = if (json.has("angle")) json.optInt("angle") else null
         val durationMs = if (json.has("durationMs")) json.optLong("durationMs") else null
-        lastCommandLabel = "chassis $action"
+        lastCommandLabel = "chassis $action${angle?.let { " ${it}°" } ?: ""}"
         lastCommandAt = System.currentTimeMillis()
         when (action) {
-            "frente" -> sdk.moverFrente(duracaoMs = durationMs)
-            "tras" -> sdk.moverTras(duracaoMs = durationMs)
-            "esquerda" -> sdk.virarEsquerda()
-            "direita" -> sdk.virarDireita()
-            "parar" -> stop()
+            "frente" -> sdk.moverFrente(speed, durationMs)
+            "tras" -> sdk.moverTras(speed, durationMs)
+            "esquerda" -> sdk.virarEsquerda(angle, speed)
+            "direita" -> sdk.virarDireita(angle, speed)
+            "parar" -> { sdk.pararMovimento(); stop() }
             else -> Log.w(TAG, "Ação de chassis desconhecida: $action")
         }
     }
 
-    /** Passo do loop de controle: atualiza distância frontal e aplica o watchdog. */
-    fun tick(@Suppress("UNUSED_PARAMETER") dtSec: Double) {
-        frontCm = chassis.frontCm
+    private fun applyJoystick(x: Double, y: Double, speed: Double, boost: Boolean) {
+        val dx = deadzone(x)
+        val dy = deadzone(y)
+        val vMax = if (boost) config.vMaxBoost else config.vMax
+        // y -> linear (frente +/trás −); x -> angular (girar esq +/dir −)
+        val angSign = if (config.invertAngular) -1.0 else 1.0
+        targetV = dy * vMax * speed
+        targetW = angSign * dx * config.wMax * speed
+        lastCommandAt = System.currentTimeMillis()
+    }
+
+    fun stop() {
+        targetV = 0.0; targetW = 0.0
+        currentV = 0.0; currentW = 0.0
+        chassis.cancelAction()
+        chassis.sendVelocity(0.0, 0.0)
+        lastCommandLabel = "stop"
+        lastCommandAt = System.currentTimeMillis()
+    }
+
+    /**
+     * Passo do loop de controle. [dtSec] é o tempo desde o tick anterior.
+     * Atualiza a rampa, aplica watchdog + segurança e envia ao chassi.
+     */
+    fun tick(dtSec: Double) {
         val now = System.currentTimeMillis()
-        if (moving && now - lastCommandAt > config.watchdogMs) {
-            Log.i(TAG, "Watchdog: sem comando há >${config.watchdogMs}ms — parando")
-            stop()
+
+        // Watchdog: sem comando recente -> alvo zero.
+        var tv = targetV
+        var tw = targetW
+        if (now - lastCommandAt > config.watchdogMs) { tv = 0.0; tw = 0.0 }
+
+        // Segurança de obstáculo frontal.
+        frontCm = chassis.frontDistanceCm()
+        if (!frontCm.isNaN() && frontCm < config.safeFrontCm && tv > 0.0) {
+            tv = 0.0
         }
+
+        // Rampa suave (limita a variação por tick).
+        currentV = ramp(currentV, tv, config.accelLinear * dtSec)
+        currentW = ramp(currentW, tw, config.accelAngular * dtSec)
+
+        // Tetos RÍGIDOS — nunca exceder, independente de payload.
+        currentV = clamp(currentV, -config.vMaxBoost, config.vMaxBoost)
+        currentW = clamp(currentW, -config.wMax, config.wMax)
+
+        chassis.sendVelocity(currentV, currentW)
+    }
+
+    /** Aplica deadzone e re-escala o restante para [0,1] preservando o sinal. */
+    private fun deadzone(value: Double): Double {
+        val a = abs(value)
+        if (a < config.deadzone) return 0.0
+        val scaled = (a - config.deadzone) / (1.0 - config.deadzone)
+        return sign(value) * scaled
+    }
+
+    private fun ramp(current: Double, target: Double, maxDelta: Double): Double {
+        val delta = target - current
+        if (abs(delta) <= maxDelta) return target
+        return current + sign(delta) * maxDelta
     }
 
     private fun clamp(v: Double, lo: Double, hi: Double) = if (v < lo) lo else if (v > hi) hi else v
