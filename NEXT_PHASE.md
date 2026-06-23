@@ -30,6 +30,14 @@ As fases **2** (rede do chassi) e **3** (web → MQTT) são as que destravam o f
 - [ ] **9. Build de release assinado** — job `assembleRelease` + assinatura no workflow.
   - Arquivos: `.github/workflows/android-build.yml`, `KenMotionBridge/app/build.gradle`.
 - [ ] **10. Smoke test ponta a ponta** — `docs/SMOKE_TEST.md` (broker → cmd → chassi → feedback).
+- [x] **11. Reconexão MQTT robusta a troca de rede** — corrige o "conecta e cai" com
+  `Software caused connection abort` no setup dual-path. `MqttManager` deixa de usar o
+  auto-reconnect do Paho (que prendia o socket a uma `Network` celular obsoleta) e passa a
+  reconectar por conta própria, reconstruindo cliente + `socketFactory` a cada tentativa
+  (backoff 2→4→8→16→30s). Um `NetworkCallback` persistente força reconexão imediata quando a
+  celular/USB troca de instância.
+  - Arquivos: `mqtt/MqttManager.kt`, teste `app/src/test/.../MqttBackoffTest.kt`,
+    `app/build.gradle` (JUnit), `.github/workflows/android-build.yml` (passo `testDebugUnitTest`).
 
 ## Contrato MQTT atual (referência rápida)
 - `ken/motion/cmd` (web→ponte): `{type:"joystick",x,y,speed,boost}` · `{type:"stop"}` · `{type:"chassis",action,speed,angle,durationMs}`

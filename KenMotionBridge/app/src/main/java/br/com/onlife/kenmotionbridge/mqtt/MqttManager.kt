@@ -9,7 +9,7 @@ import android.util.Log
 import br.com.onlife.kenmotionbridge.BridgeConfig
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
 import org.eclipse.paho.client.mqttv3.MqttAsyncClient
-import org.eclipse.paho.client.mqttv3.MqttCallbackExtended
+import org.eclipse.paho.client.mqttv3.MqttCallback
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttException
 import org.eclipse.paho.client.mqttv3.MqttMessage
@@ -22,7 +22,9 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
-import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.SSLContext
@@ -45,6 +47,13 @@ import javax.net.ssl.X509TrustManager
  * Split de rotas (Fase 2): se [BridgeConfig.mqttForceCellular] estiver ligado, o socket do
  * MQTT é amarrado à rede CELULAR (4G/USB), deixando o Wi-Fi livre para a rede local do robô
  * (chassi 192.168.99.x). Assim chassi e broker funcionam ao mesmo tempo.
+ *
+ * Reconexão robusta (Fase 11): em vez do auto-reconnect do Paho — que reaproveita a mesma
+ * `socketFactory` com uma instância de [Network] capturada UMA vez — fazemos a reconexão por
+ * conta própria. A cada tentativa o cliente e a `socketFactory` são RECONSTRUÍDOS, re-amarrando
+ * o socket à rede celular ATUAL. Um [ConnectivityManager.NetworkCallback] persistente observa a
+ * celular/USB e força reconexão quando a instância de rede troca (causa raiz do erro
+ * "Software caused connection abort": socket preso a uma rede que deixou de existir).
  */
 class MqttManager(
     private val context: Context,
@@ -53,20 +62,57 @@ class MqttManager(
     private val onConnectionChanged: (Boolean, String?) -> Unit,
     private val onCommand: (String) -> Unit,
 ) {
-    companion object { private const val TAG = "MqttManager" }
+    companion object {
+        private const val TAG = "MqttManager"
+
+        /**
+         * Backoff exponencial com teto para as tentativas de reconexão.
+         * tentativa 0 -> 2s, 1 -> 4s, 2 -> 8s, 3 -> 16s, 4+ -> 30s (teto).
+         * Função pura (sem dependência de Android) para permitir teste unitário.
+         */
+        fun backoffDelayMs(attempt: Int): Long {
+            val shift = attempt.coerceIn(0, 4)
+            return (2_000L shl shift).coerceAtMost(30_000L)
+        }
+    }
 
     private var client: MqttAsyncClient? = null
     private var cellularCallback: ConnectivityManager.NetworkCallback? = null
 
+    /** Rede celular/USB ATUAL (atualizada pelo callback). null = indisponível no momento. */
+    private val cellularNet = AtomicReference<Network?>()
+
+    /** Verdadeiro entre [connect] e [disconnect]; controla se devemos reagendar reconexões. */
+    @Volatile private var wantConnected = false
+
+    /** Contador do backoff; zerado a cada conexão bem-sucedida. */
+    private var attempt = 0
+
+    private val reconnectExec: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "mqtt-reconnect").apply { isDaemon = true }
+        }
+    private var pending: ScheduledFuture<*>? = null
+
     fun connect() {
+        wantConnected = true
+        if (config.mqttForceCellular) registerCellularCallback()
+        doConnect()
+    }
+
+    /** (Re)cria o cliente e tenta conectar. Sincronizado para serializar com o agendador. */
+    @Synchronized
+    private fun doConnect() {
+        if (!wantConnected) return
+        closeClientQuietly()
         try {
             val cid = "${config.clientId}-${(SecureRandom().nextInt(9000) + 1000)}"
             val c = MqttAsyncClient(config.mqttUri, cid, MemoryPersistence())
             client = c
 
             val opts = MqttConnectOptions().apply {
-                // Reconexão automática + sessão limpa, conforme pedido.
-                isAutomaticReconnect = true
+                // Reconexão é nossa (re-amarra a rede a cada tentativa); a do Paho fica DESLIGADA.
+                isAutomaticReconnect = false
                 isCleanSession = config.cleanSession            // default true
                 keepAliveInterval = config.keepAliveSec          // default 30 s
                 connectionTimeout = 10                            // 10 s
@@ -80,9 +126,9 @@ class MqttManager(
                 // TLS habilitado para ssl:// e wss:// (SSLSocketFactory padrão do sistema).
                 if (config.mqttUri.startsWith("ssl") || config.mqttUri.startsWith("wss")) {
                     val base = buildSslContext().socketFactory
-                    // Split de rotas: amarra o socket TLS à rede celular, se solicitado.
+                    // Split de rotas: amarra o socket TLS à rede celular ATUAL, se solicitado.
                     socketFactory = if (config.mqttForceCellular) {
-                        val net = acquireCellular(6000)
+                        val net = awaitCellular(6000)
                         if (net != null) {
                             val host = BridgeConfig.hostFromUri(config.mqttUri)
                             val port = BridgeConfig.portFromUri(config.mqttUri)
@@ -103,16 +149,12 @@ class MqttManager(
                     "(len=${opts.userName?.length ?: 0}) | passLen=${opts.password?.size ?: 0}"
             )
 
-            c.setCallback(object : MqttCallbackExtended {
-                override fun connectComplete(reconnect: Boolean, serverURI: String?) {
-                    Log.i(TAG, "Conectado (reconnect=$reconnect) a $serverURI")
-                    onConnectionChanged(true, null)
-                    subscribeCmd()
-                }
+            c.setCallback(object : MqttCallback {
                 override fun connectionLost(cause: Throwable?) {
                     val msg = describe(cause)
                     Log.w(TAG, "Conexão perdida: $msg")
                     onConnectionChanged(false, "conexão perdida — $msg")
+                    scheduleReconnect()
                 }
                 override fun messageArrived(topic: String?, message: MqttMessage?) {
                     if (topic == config.topicCmd && message != null) {
@@ -123,18 +165,54 @@ class MqttManager(
             })
 
             c.connect(opts, null, object : org.eclipse.paho.client.mqttv3.IMqttActionListener {
-                override fun onSuccess(asyncActionToken: org.eclipse.paho.client.mqttv3.IMqttToken?) {}
+                override fun onSuccess(asyncActionToken: org.eclipse.paho.client.mqttv3.IMqttToken?) {
+                    synchronized(this@MqttManager) { attempt = 0 }
+                    Log.i(TAG, "Conectado a ${config.mqttUri}")
+                    onConnectionChanged(true, null)
+                    subscribeCmd()
+                }
                 override fun onFailure(asyncActionToken: org.eclipse.paho.client.mqttv3.IMqttToken?, ex: Throwable?) {
                     val msg = describe(ex)
                     Log.e(TAG, "Falha ao conectar: $msg", ex)
                     onConnectionChanged(false, msg)
+                    scheduleReconnect()
                 }
             })
         } catch (e: Throwable) {
             val msg = describe(e)
             Log.e(TAG, "Erro de MQTT: $msg", e)
             onConnectionChanged(false, msg)
+            scheduleReconnect()
         }
+    }
+
+    /** Agenda a próxima tentativa com backoff exponencial (sem empilhar agendamentos). */
+    @Synchronized
+    private fun scheduleReconnect() {
+        if (!wantConnected) return
+        pending?.cancel(false)
+        val delay = backoffDelayMs(attempt)
+        attempt++
+        Log.i(TAG, "Reagendando conexão em ${delay}ms (tentativa $attempt)")
+        pending = runCatching {
+            reconnectExec.schedule({ doConnect() }, delay, TimeUnit.MILLISECONDS)
+        }.getOrNull()
+    }
+
+    /**
+     * Reconexão IMEDIATA disparada por troca de rede celular: o socket atual está preso a uma
+     * [Network] que deixou de valer, então reabrimos do zero (com a rede nova) sem esperar backoff.
+     */
+    @Synchronized
+    private fun reconnectNow(reason: String) {
+        if (!wantConnected) return
+        Log.i(TAG, "Reconexão imediata: $reason")
+        attempt = 0
+        pending?.cancel(false)
+        closeClientQuietly()
+        pending = runCatching {
+            reconnectExec.schedule({ doConnect() }, 300, TimeUnit.MILLISECONDS)
+        }.getOrNull()
     }
 
     private fun subscribeCmd() {
@@ -157,41 +235,76 @@ class MqttManager(
     fun isConnected(): Boolean = client?.isConnected == true
 
     fun disconnect() {
-        runCatching { client?.disconnect() }
-        runCatching { client?.close() }
-        client = null
+        wantConnected = false
+        synchronized(this) {
+            pending?.cancel(false)
+            pending = null
+        }
+        closeClientQuietly()
         cellularCallback?.let { cb ->
             runCatching {
                 context.getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(cb)
             }
         }
         cellularCallback = null
+        cellularNet.set(null)
+        runCatching { reconnectExec.shutdownNow() }
+    }
+
+    /** Encerra o cliente atual sem lançar e sem bloquear (usado antes de recriar). */
+    private fun closeClientQuietly() {
+        val c = client ?: return
+        client = null
+        runCatching { c.setCallback(null) }
+        runCatching { if (c.isConnected) c.disconnectForcibly(0, 0) }
+        runCatching { c.close(true) }
     }
 
     /**
-     * Solicita e aguarda (até [timeoutMs]) a rede CELULAR com internet. Mantém o callback
-     * registrado para o sistema preservar o 4G/USB ativo durante a sessão (liberado em [disconnect]).
+     * Registra (uma vez) o callback da rede CELULAR. Mantém [cellularNet] sempre apontando para a
+     * rede 4G/USB atual e força reconexão quando a instância troca — para o socket TLS não ficar
+     * preso a uma rede morta (causa do "connection abort" intermitente).
      */
-    private fun acquireCellular(timeoutMs: Long): Network? {
-        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return null
+    private fun registerCellularCallback() {
+        if (cellularCallback != null) return
+        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return
         val req = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
-        val holder = AtomicReference<Network?>()
-        val latch = CountDownLatch(1)
         val cb = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) { holder.set(network); latch.countDown() }
+            override fun onAvailable(network: Network) {
+                val prev = cellularNet.getAndSet(network)
+                if (prev != network) {
+                    // Rede nova (ou trocada): re-amarrar o socket a ela.
+                    if (prev != null) reconnectNow("rede celular trocou de instância")
+                }
+            }
+            override fun onLost(network: Network) {
+                // Só limpa se for a rede que estávamos usando.
+                cellularNet.compareAndSet(network, null)
+            }
         }
-        return try {
-            cellularCallback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
-            cellularCallback = cb
+        runCatching {
             cm.requestNetwork(req, cb)
-            latch.await(timeoutMs, TimeUnit.MILLISECONDS)
-            holder.get()
-        } catch (t: Throwable) {
-            Log.w(TAG, "Falha ao obter rede celular: ${t.message}"); null
+            cellularCallback = cb
+        }.onFailure { Log.w(TAG, "Falha ao registrar callback de rede celular: ${it.message}") }
+    }
+
+    /** Aguarda (poll) a rede celular ficar disponível, até [timeoutMs]. */
+    private fun awaitCellular(timeoutMs: Long): Network? {
+        cellularNet.get()?.let { return it }
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(150)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
+            }
+            cellularNet.get()?.let { return it }
         }
+        return cellularNet.get()
     }
 
     /**

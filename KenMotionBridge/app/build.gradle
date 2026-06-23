@@ -78,4 +78,7 @@ dependencies {
 
     // MQTT (Paho Java — suporta ssl:// e wss:// para o HiveMQ Cloud)
     implementation 'org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5'
+
+    // Testes unitários JVM (lógica pura — ex.: backoff de reconexão).
+    testImplementation 'junit:junit:4.13.2'
 }
