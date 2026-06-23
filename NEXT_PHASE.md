@@ -14,8 +14,10 @@ As fases **2** (rede do chassi) e **3** (web → MQTT) são as que destravam o f
   - Arquivos: `mqtt/MqttManager.kt` (CellularSslSocketFactory + requestNetwork), `BridgeConfig.kt`
     (`mqttForceCellular`), `SettingsActivity.kt`/`activity_settings.xml` (checkbox),
     `AndroidManifest.xml` (CHANGE_NETWORK_STATE). Validar no robô.
-- [ ] **3. Migrar o web app para MQTT (WSS)** — trocar HTTP/WS direto por `mqtt.js`.
-  - Arquivos: `src/services/RobotConnection.ts`, `src/types/Robot.ts`, `src/pages/*`.
+- [x] **3. Migrar o web app para MQTT (WSS)** — `RobotConnection.ts` agora usa `mqtt.js`
+  (assina feedback/telemetria, publica `ken/motion/cmd`); tradução em `mqttCommand.ts`;
+  config por env (`src/config/mqtt.ts` + `.env.example`); teste `mqttCommand.test.ts`.
+  Pendente (Lovable/dev): `npm install` (dep `mqtt`), definir `.env` e validar UI.
 - [ ] **4. Contrato MQTT versionado** — `docs/MQTT_CONTRACT.md` (tópicos + schemas) como fonte única.
 - [ ] **5. Testes de unidade (web)** — parsing de telemetria, joystick→comando, estado de conexão (Vitest).
   - Arquivos: novos `*.test.ts` ao lado de `RobotConnection.ts`/`types/Robot.ts`.

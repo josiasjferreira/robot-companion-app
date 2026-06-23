@@ -1,28 +1,50 @@
-import { ConnectionStatus, ConnectionConfig, RobotCommand, RobotResponse, LogEntry } from '@/types/Robot';
+import mqtt, { MqttClient } from 'mqtt';
+import {
+  ConnectionStatus, ConnectionConfig, RobotCommand, RobotResponse, LogEntry,
+  MotionFeedback, SensorTelemetry, TelemetryState,
+} from '@/types/Robot';
+import { mqttConfig, isMqttConfigured } from '@/config/mqtt';
+import { toMqttCommand } from '@/services/mqttCommand';
 
 type LogCallback = (entry: LogEntry) => void;
 type StatusCallback = (status: ConnectionStatus) => void;
+type TelemetryCallback = (state: TelemetryState) => void;
 
+/**
+ * Serviço de conexão com o robô via MQTT (HiveMQ Cloud, WSS).
+ *
+ * O navegador NÃO fala com o robô diretamente: publica comandos em `ken/motion/cmd`
+ * e assina `ken/motion/feedback` + `ken/sensors/telemetry`. A tradução para o schema
+ * da ponte (joystick/stop) é feita em [toMqttCommand].
+ *
+ * A interface pública (setCallbacks/connect/disconnect/sendCommand/getStatus/getLatency)
+ * é mantida para compatibilidade com as telas existentes.
+ */
 class RobotConnectionService {
-  private config: ConnectionConfig = { ip: '192.168.99.2', port: '8080' };
+  private config: ConnectionConfig = { ip: '', port: '8884' };
   private status: ConnectionStatus = 'disconnected';
-  private ws: WebSocket | null = null;
+  private client: MqttClient | null = null;
   private onLog: LogCallback | null = null;
   private onStatus: StatusCallback | null = null;
+  private onTelemetry: TelemetryCallback | null = null;
   private latency: number | null = null;
   private lastAttempt: Date | null = null;
+  private telemetry: TelemetryState = { feedback: null, sensors: null, lastTs: 0 };
 
-  setCallbacks(onLog: LogCallback, onStatus: StatusCallback) {
+  setCallbacks(onLog: LogCallback, onStatus: StatusCallback, onTelemetry?: TelemetryCallback) {
     this.onLog = onLog;
     this.onStatus = onStatus;
+    this.onTelemetry = onTelemetry ?? null;
   }
 
   getConfig() { return this.config; }
   getLatency() { return this.latency; }
   getLastAttempt() { return this.lastAttempt; }
   getStatus() { return this.status; }
+  getTelemetry() { return this.telemetry; }
 
   setConfig(config: ConnectionConfig) {
+    // Mantido por compatibilidade com a tela de conexão; o broker vem das env VITE_MQTT_*.
     this.config = config;
   }
 
@@ -35,119 +57,115 @@ class RobotConnectionService {
     this.onStatus?.(status);
   }
 
-  private getBaseUrl() {
-    return `http://${this.config.ip}:${this.config.port}`;
-  }
-
   async connect(): Promise<boolean> {
     this.lastAttempt = new Date();
+
+    if (!isMqttConfigured()) {
+      this.setStatus('error');
+      this.log('error', 'Credenciais do broker ausentes (defina VITE_MQTT_URL, VITE_MQTT_USER, VITE_MQTT_PASS).');
+      return false;
+    }
+
     this.setStatus('connecting');
-    this.log('info', `Tentando conectar a ${this.config.ip}:${this.config.port}...`);
+    this.log('info', `Conectando ao broker MQTT ${mqttConfig.url}...`);
 
-    // Try HTTP first
-    try {
-      const start = Date.now();
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-
-      const response = await fetch(`${this.getBaseUrl()}/api/status`, {
-        method: 'GET',
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-
-      this.latency = Date.now() - start;
-
-      if (response.ok) {
-        this.setStatus('connected');
-        this.log('success', `Conectado via HTTP (${this.latency}ms)`);
-        return true;
-      }
-    } catch {
-      this.log('info', 'HTTP falhou, tentando WebSocket...');
-    }
-
-    // Try WebSocket
-    try {
-      return await this.connectWebSocket();
-    } catch {
-      this.log('error', 'WebSocket falhou');
-    }
-
-    this.setStatus('error');
-    this.log('error', 'Todas as tentativas falharam');
-    return false;
-  }
-
-  private connectWebSocket(): Promise<boolean> {
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('WebSocket timeout'));
-      }, 5000);
-
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
       try {
-        this.ws = new WebSocket(`ws://${this.config.ip}:${this.config.port}`);
+        const client = mqtt.connect(mqttConfig.url, {
+          username: mqttConfig.username,
+          password: mqttConfig.password,
+          protocolVersion: 4,
+          clean: true,
+          reconnectPeriod: 2000,
+          connectTimeout: 10000,
+          clientId: `web-${Math.random().toString(16).slice(2, 10)}`,
+        });
+        this.client = client;
 
-        this.ws.onopen = () => {
-          clearTimeout(timeout);
+        client.on('connect', () => {
           this.setStatus('connected');
-          this.log('success', 'Conectado via WebSocket');
-          resolve(true);
-        };
+          this.log('success', 'Conectado ao broker MQTT');
+          client.subscribe([mqttConfig.topicFeedback, mqttConfig.topicTelemetry], (err) => {
+            if (err) this.log('error', `Falha ao assinar tópicos: ${err.message}`);
+            else this.log('info', `Assinado: ${mqttConfig.topicFeedback}, ${mqttConfig.topicTelemetry}`);
+          });
+          if (!settled) { settled = true; resolve(true); }
+        });
 
-        this.ws.onerror = () => {
-          clearTimeout(timeout);
-          reject(new Error('WebSocket error'));
-        };
+        client.on('message', (topic, payload) => this.handleMessage(topic, payload.toString()));
 
-        this.ws.onclose = () => {
+        client.on('error', (err) => {
+          this.log('error', `Erro MQTT: ${err.message}`);
+          this.setStatus('error');
+          if (!settled) { settled = true; resolve(false); }
+        });
+
+        client.on('close', () => {
           if (this.status === 'connected') {
             this.setStatus('disconnected');
-            this.log('info', 'WebSocket desconectado');
+            this.log('info', 'Conexão MQTT encerrada');
           }
-        };
+        });
 
-        this.ws.onmessage = (event) => {
-          this.log('received', `Resposta: ${event.data}`);
-        };
-      } catch {
-        clearTimeout(timeout);
-        reject(new Error('WebSocket init failed'));
+        client.on('offline', () => {
+          this.setStatus('disconnected');
+          this.log('info', 'Broker offline (sem rede?)');
+        });
+      } catch (error) {
+        this.setStatus('error');
+        this.log('error', `Falha ao iniciar MQTT: ${error}`);
+        if (!settled) { settled = true; resolve(false); }
       }
     });
   }
 
-  async sendCommand(command: RobotCommand): Promise<RobotResponse | null> {
-    const cmd = { ...command, timestamp: Date.now() };
-    this.log('sent', `Comando: ${JSON.stringify(cmd)}`);
+  private handleMessage(topic: string, body: string) {
+    let data: unknown;
+    try { data = JSON.parse(body); } catch { this.log('error', `JSON inválido em ${topic}`); return; }
 
-    // Try WebSocket first if connected
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(cmd));
-      return { status: 'ok' };
-    }
-
-    // Fallback to HTTP
-    try {
-      const response = await fetch(`${this.getBaseUrl()}/api/command`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(cmd),
-      });
-      const data = await response.json();
-      this.log('received', `Resposta: ${JSON.stringify(data)}`);
-      return data;
-    } catch (error) {
-      this.log('error', `Erro ao enviar: ${error}`);
-      return null;
+    if (topic === mqttConfig.topicFeedback) {
+      const fb = data as MotionFeedback;
+      this.telemetry = { ...this.telemetry, feedback: fb, lastTs: fb.ts ?? Date.now() };
+      if (typeof fb.ts === 'number') this.latency = Math.max(0, Date.now() - fb.ts);
+      this.onTelemetry?.(this.telemetry);
+    } else if (topic === mqttConfig.topicTelemetry) {
+      const t = data as SensorTelemetry;
+      this.telemetry = { ...this.telemetry, sensors: t, lastTs: Math.max(this.telemetry.lastTs, t.ts ?? Date.now()) };
+      this.onTelemetry?.(this.telemetry);
     }
   }
 
+  async sendCommand(command: RobotCommand): Promise<RobotResponse | null> {
+    const client = this.client;
+    if (!client || !client.connected) {
+      this.log('error', 'Comando ignorado — broker MQTT desconectado');
+      return null;
+    }
+    const mqttCmd = toMqttCommand(command);
+    if (!mqttCmd) {
+      this.log('error', `Comando '${command.cmd}' não suportado pela ponte`);
+      return { status: 'error', message: 'unsupported' };
+    }
+    const payload = JSON.stringify(mqttCmd);
+    return new Promise<RobotResponse | null>((resolve) => {
+      client.publish(mqttConfig.topicCmd, payload, { qos: 0 }, (err) => {
+        if (err) {
+          this.log('error', `Falha ao publicar: ${err.message}`);
+          resolve(null);
+        } else {
+          this.log('sent', payload);
+          resolve({ status: 'ok' });
+        }
+      });
+    });
+  }
+
   disconnect() {
-    this.ws?.close();
-    this.ws = null;
+    this.client?.end(true);
+    this.client = null;
     this.setStatus('disconnected');
-    this.log('info', 'Desconectado');
+    this.log('info', 'Desconectado do broker');
   }
 }
 
