@@ -28,6 +28,7 @@ class SettingsActivity : AppCompatActivity() {
         binding.editPort.setText(BridgeConfig.portFromUri(cfg.mqttUri).toString())
         binding.editUser.setText(cfg.mqttUser)
         binding.editPass.setText(cfg.mqttPassword)
+        binding.chkForceCellular.isChecked = cfg.mqttForceCellular
 
         binding.btnSave.setOnClickListener { saveAndRestart() }
         binding.btnCancel.setOnClickListener { finish() }
@@ -42,8 +43,9 @@ class SettingsActivity : AppCompatActivity() {
         val port = binding.editPort.text.toString().trim().toIntOrNull() ?: 8883
         val user = binding.editUser.text.toString().trim()
         val pass = binding.editPass.text.toString().trim()
+        val forceCellular = binding.chkForceCellular.isChecked
 
-        BridgeConfig.saveSettings(this, host, port, user, pass)
+        BridgeConfig.saveSettings(this, host, port, user, pass, forceCellular)
 
         // Reinicia a ponte para aplicar imediatamente (reconecta ao broker).
         ContextCompat.startForegroundService(

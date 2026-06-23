@@ -19,6 +19,8 @@ data class BridgeConfig(
     val cleanSession: Boolean,
     val keepAliveSec: Int,
     val tlsInsecure: Boolean,
+    /** Amarra o socket do MQTT à rede celular (4G/USB) — split de rotas com o Wi-Fi do robô. */
+    val mqttForceCellular: Boolean,
     // Tópicos
     val topicCmd: String,
     val topicFeedback: String,
@@ -50,6 +52,7 @@ data class BridgeConfig(
         const val KEY_PORT = "mqtt_port"
         const val KEY_USER = "mqtt_user"
         const val KEY_PASS = "mqtt_pass"
+        const val KEY_FORCE_CELL = "mqtt_force_cellular"
 
         /** Host (sem esquema/porta) extraído de uma URI ssl://host:porta ou wss://host:porta/path. */
         fun hostFromUri(uri: String): String =
@@ -61,12 +64,16 @@ data class BridgeConfig(
                 .toIntOrNull() ?: 8883
 
         /** Persiste os valores da tela de Configurações. */
-        fun saveSettings(context: Context, host: String, port: Int, user: String, pass: String) {
+        fun saveSettings(
+            context: Context, host: String, port: Int, user: String, pass: String,
+            forceCellular: Boolean,
+        ) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                 .putString(KEY_HOST, host.trim())
                 .putInt(KEY_PORT, port)
                 .putString(KEY_USER, user.trim())
                 .putString(KEY_PASS, pass.trim())
+                .putBoolean(KEY_FORCE_CELL, forceCellular)
                 .apply()
         }
 
@@ -105,6 +112,7 @@ data class BridgeConfig(
                 cleanSession = mqtt.optBoolean("cleanSession", true),
                 keepAliveSec = mqtt.optInt("keepAliveSec", 30),
                 tlsInsecure = mqtt.optBoolean("tlsInsecure", false),
+                mqttForceCellular = sp.getBoolean(KEY_FORCE_CELL, mqtt.optBoolean("forceCellular", false)),
                 topicCmd = topics.optString("cmd", "ken/motion/cmd"),
                 topicFeedback = topics.optString("feedback", "ken/motion/feedback"),
                 topicTelemetry = topics.optString("telemetry", "ken/sensors/telemetry"),

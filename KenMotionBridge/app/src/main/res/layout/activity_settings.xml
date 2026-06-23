@@ -69,11 +69,27 @@
             android:textColor="#E6EDF3"
             android:textColorHint="#5B6776" />
 
+        <CheckBox
+            android:id="@+id/chkForceCellular"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:textColor="#E6EDF3"
+            android:text="Forçar MQTT pelo 4G/dado móvel (chassi fica no Wi-Fi do robô)" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:textColor="#8B98A5"
+            android:textSize="12sp"
+            android:text="Ligue isto quando o tablet estiver no Wi-Fi do robô (RoboKen_Controle) e usar 4G/USB para a internet. O socket do MQTT sai pelo celular; o chassi (192.168.99.x) continua pelo Wi-Fi." />
+
         <Button
             android:id="@+id/btnSave"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="16dp"
             android:text="Salvar e reiniciar ponte" />
 
         <Button

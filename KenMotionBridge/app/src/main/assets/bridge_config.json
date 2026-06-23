@@ -9,7 +9,8 @@
     "clientId": "ken-motion-bridge",
     "cleanSession": true,
     "keepAliveSec": 30,
-    "tlsInsecure": false
+    "tlsInsecure": false,
+    "forceCellular": false
   },
 
   "topics": {

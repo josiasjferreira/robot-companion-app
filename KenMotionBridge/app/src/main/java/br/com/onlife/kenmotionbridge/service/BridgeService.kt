@@ -114,6 +114,7 @@ class BridgeService : Service() {
         motionSdk = KenMotionSdk(chassis)
         motion = MotionController(chassis, config, motionSdk)
         mqtt = MqttManager(
+            context = this,
             config = config,
             onConnectionChanged = { up, err ->
                 StatusBus.update {

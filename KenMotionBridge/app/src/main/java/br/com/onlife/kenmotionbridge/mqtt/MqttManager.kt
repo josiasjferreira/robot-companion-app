@@ -1,5 +1,10 @@
 package br.com.onlife.kenmotionbridge.mqtt
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.util.Log
 import br.com.onlife.kenmotionbridge.BridgeConfig
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
@@ -11,13 +16,19 @@ import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.MqttSecurityException
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import java.net.ConnectException
+import java.net.InetAddress
+import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLException
 import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
@@ -30,8 +41,13 @@ import javax.net.ssl.X509TrustManager
  *
  * Em caso de falha, reporta o MOTIVO exato (auth, host inacessível, TLS handshake) via
  * [onConnectionChanged] para que a tela mostre o erro real em vez de só "DESCONECTADO".
+ *
+ * Split de rotas (Fase 2): se [BridgeConfig.mqttForceCellular] estiver ligado, o socket do
+ * MQTT é amarrado à rede CELULAR (4G/USB), deixando o Wi-Fi livre para a rede local do robô
+ * (chassi 192.168.99.x). Assim chassi e broker funcionam ao mesmo tempo.
  */
 class MqttManager(
+    private val context: Context,
     private val config: BridgeConfig,
     /** (conectado, mensagemDeErro?) — erro só vem preenchido quando conectado=false. */
     private val onConnectionChanged: (Boolean, String?) -> Unit,
@@ -40,6 +56,7 @@ class MqttManager(
     companion object { private const val TAG = "MqttManager" }
 
     private var client: MqttAsyncClient? = null
+    private var cellularCallback: ConnectivityManager.NetworkCallback? = null
 
     fun connect() {
         try {
@@ -62,7 +79,20 @@ class MqttManager(
                 }
                 // TLS habilitado para ssl:// e wss:// (SSLSocketFactory padrão do sistema).
                 if (config.mqttUri.startsWith("ssl") || config.mqttUri.startsWith("wss")) {
-                    socketFactory = buildSslContext().socketFactory
+                    val base = buildSslContext().socketFactory
+                    // Split de rotas: amarra o socket TLS à rede celular, se solicitado.
+                    socketFactory = if (config.mqttForceCellular) {
+                        val net = acquireCellular(6000)
+                        if (net != null) {
+                            val host = BridgeConfig.hostFromUri(config.mqttUri)
+                            val port = BridgeConfig.portFromUri(config.mqttUri)
+                            Log.i(TAG, "MQTT amarrado à rede CELULAR (4G/USB) para $host:$port")
+                            CellularSslSocketFactory(net, base, host, port)
+                        } else {
+                            Log.w(TAG, "forceCellular ligado, mas rede celular indisponível — usando rota padrão")
+                            base
+                        }
+                    } else base
                 }
             }
 
@@ -130,6 +160,67 @@ class MqttManager(
         runCatching { client?.disconnect() }
         runCatching { client?.close() }
         client = null
+        cellularCallback?.let { cb ->
+            runCatching {
+                context.getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(cb)
+            }
+        }
+        cellularCallback = null
+    }
+
+    /**
+     * Solicita e aguarda (até [timeoutMs]) a rede CELULAR com internet. Mantém o callback
+     * registrado para o sistema preservar o 4G/USB ativo durante a sessão (liberado em [disconnect]).
+     */
+    private fun acquireCellular(timeoutMs: Long): Network? {
+        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return null
+        val req = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        val holder = AtomicReference<Network?>()
+        val latch = CountDownLatch(1)
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { holder.set(network); latch.countDown() }
+        }
+        return try {
+            cellularCallback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
+            cellularCallback = cb
+            cm.requestNetwork(req, cb)
+            latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+            holder.get()
+        } catch (t: Throwable) {
+            Log.w(TAG, "Falha ao obter rede celular: ${t.message}"); null
+        }
+    }
+
+    /**
+     * SSLSocketFactory que cria o socket de transporte AMARRADO a uma [Network] específica
+     * (celular) e o envelopa em TLS. O Paho usa `createSocket()` (sem args) e depois `connect()`;
+     * por isso o socket base (não conectado, já vinculado à rede) é envelopado e conectado pelo Paho.
+     */
+    private class CellularSslSocketFactory(
+        private val network: Network,
+        private val delegate: SSLSocketFactory,
+        private val host: String,
+        private val port: Int,
+    ) : SSLSocketFactory() {
+        override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
+        override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
+        override fun createSocket(): Socket {
+            val base = network.socketFactory.createSocket()   // não conectado, vinculado ao celular
+            return delegate.createSocket(base, host, port, true)
+        }
+        override fun createSocket(h: String?, p: Int): Socket =
+            delegate.createSocket(network.socketFactory.createSocket(h, p), host, port, true)
+        override fun createSocket(h: String?, p: Int, lh: InetAddress?, lp: Int): Socket =
+            delegate.createSocket(network.socketFactory.createSocket(h, p, lh, lp), host, port, true)
+        override fun createSocket(a: InetAddress?, p: Int): Socket =
+            delegate.createSocket(network.socketFactory.createSocket(a, p), host, port, true)
+        override fun createSocket(a: InetAddress?, p: Int, lh: InetAddress?, lp: Int): Socket =
+            delegate.createSocket(network.socketFactory.createSocket(a, p, lh, lp), host, port, true)
+        override fun createSocket(s: Socket?, h: String?, p: Int, autoClose: Boolean): Socket =
+            delegate.createSocket(s, h, p, autoClose)
     }
 
     /**

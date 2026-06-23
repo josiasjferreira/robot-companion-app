@@ -9,8 +9,11 @@ As fases **2** (rede do chassi) e **3** (web → MQTT) são as que destravam o f
 ## Itens
 
 - [x] **1. Documentar o baseline** — `STATUS.md` + `NEXT_PHASE.md` na raiz.
-- [ ] **2. Fechar a rede do chassi** — validar dual-path (Wi-Fi `RoboKen_Controle` + 4G/USB); se preciso, **bind do MQTT à rede celular** (split de rotas).
-  - Arquivos: `KenMotionBridge/.../mqtt/MqttManager.kt`, `service/BridgeService.kt`.
+- [x] **2. Fechar a rede do chassi** — bind opcional do MQTT à rede celular (split de rotas),
+  acionado por "Forçar MQTT pelo 4G" nas Configurações. Chassi pelo Wi-Fi do robô, MQTT pelo 4G/USB.
+  - Arquivos: `mqtt/MqttManager.kt` (CellularSslSocketFactory + requestNetwork), `BridgeConfig.kt`
+    (`mqttForceCellular`), `SettingsActivity.kt`/`activity_settings.xml` (checkbox),
+    `AndroidManifest.xml` (CHANGE_NETWORK_STATE). Validar no robô.
 - [ ] **3. Migrar o web app para MQTT (WSS)** — trocar HTTP/WS direto por `mqtt.js`.
   - Arquivos: `src/services/RobotConnection.ts`, `src/types/Robot.ts`, `src/pages/*`.
 - [ ] **4. Contrato MQTT versionado** — `docs/MQTT_CONTRACT.md` (tópicos + schemas) como fonte única.
