@@ -44,8 +44,12 @@ class NetworkRouter(context: Context) {
         }
     }
 
-    /** Rede cujo endereço cai na MESMA /24 do [chassisIp]. Prefere ETHERNET (cabo direto). */
-    fun findChassisNetwork(chassisIp: String): Network? {
+    /**
+     * Rede cuja sub-rede contém o chassi. Entre as candidatas, PREFERE a que realmente alcança
+     * [chassisIp]:[chassisPort] agora (sonda L4); depois Ethernet (cabo); por fim a primeira.
+     * Resolve o caso de duas interfaces na mesma /24 (ex.: cabo eth0 instável + Wi-Fi do robô).
+     */
+    fun findChassisNetwork(chassisIp: String, chassisPort: Int = 0): Network? {
         val cm = cm ?: return null
         val prefix = chassisIp.substringBeforeLast('.', "")
         if (prefix.isEmpty()) return null
@@ -54,7 +58,12 @@ class NetworkRouter(context: Context) {
                 it.address?.hostAddress?.substringBeforeLast('.', "") == prefix
             } == true
         }
-        // Cabo (Ethernet) é o caminho direto/confiável; Wi-Fi do robô pode ter isolamento de cliente.
+        if (matches.isEmpty()) return null
+        // 1) a que ALCANÇA o chassi agora (mais confiável que assumir o cabo).
+        if (chassisPort > 0) {
+            matches.firstOrNull { probeTcp(chassisIp, chassisPort, it) == "OK" }?.let { return it }
+        }
+        // 2) Ethernet (cabo direto); 3) a primeira.
         return matches.firstOrNull { n ->
             cm.getNetworkCapabilities(n)?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
         } ?: matches.firstOrNull()
@@ -120,7 +129,9 @@ class NetworkRouter(context: Context) {
                 val inet = if (c?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true) "INET" else "—"
                 val valid = if (c?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true) "OK" else "—"
                 val iface = lp?.interfaceName ?: "?"
-                val addrs = lp?.linkAddresses?.joinToString(",") { it.address?.hostAddress ?: "?" } ?: ""
+                val addrs = lp?.linkAddresses?.joinToString(",") {
+                    "${it.address?.hostAddress ?: "?"}/${it.prefixLength}"
+                } ?: ""
                 val isChassi = lp?.linkAddresses?.any {
                     it.address?.hostAddress?.substringBeforeLast('.', "") == prefix
                 } == true

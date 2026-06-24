@@ -148,8 +148,15 @@ class BridgeService : Service() {
      * direta à porta do chassi para diagnóstico. Publica o inventário das redes na tela.
      * Retorna (redeParaMqtt, precisaAmarrarMqtt).
      */
+    /** Re-amarra à rede do chassi mais alcançável agora (lida com eth0/USB-Ethernet oscilando). */
+    private fun rebindChassisQuiet() {
+        if (!config.dualHoming) return
+        networkRouter.findChassisNetwork(config.chassisIp, config.chassisPort)
+            ?.let { networkRouter.bindProcess(it) }
+    }
+
     private fun applyDualHoming(): Pair<Network?, Boolean>? {
-        val chassi = networkRouter.findChassisNetwork(config.chassisIp)
+        val chassi = networkRouter.findChassisNetwork(config.chassisIp, config.chassisPort)
         var bound = false
         if (config.dualHoming && chassi != null) {
             bound = networkRouter.bindProcess(chassi)
@@ -242,6 +249,7 @@ class BridgeService : Service() {
         if (chassis.connected && !chassis.dcConnected()) {
             Log.w(TAG, "Canal Slamware caiu (getDCIsConnected=false) — reconectando…")
             StatusBus.update { it.copy(sdkConnected = false, sdkError = "reconectando ao chassi…") }
+            rebindChassisQuiet()
             chassis.connect()
         }
 
