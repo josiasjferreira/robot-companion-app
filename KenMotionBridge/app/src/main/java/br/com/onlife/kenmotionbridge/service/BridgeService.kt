@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.Network
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -133,15 +134,31 @@ class BridgeService : Service() {
     /** Conecta chassi (SDK) e broker MQTT em background. O status do SDK chega pelo callback. */
     private fun connectAll() {
         scope.launch {
-            // Dual-homing: amarra o processo à Ethernet ANTES do SDK abrir o socket do chassi.
-            if (config.dualHoming) {
-                val ok = networkRouter.bindChassisToEthernet(4000)
-                Log.i(TAG, "Dual-homing: bind à Ethernet ${if (ok) "OK" else "indisponível"}")
-            }
+            val internet = applyDualHoming()
             chassis.connect()
             motionSdk.inicializarConexaoRobo()
-            mqtt.connect()
+            mqtt.connect(internet?.first, bindMqtt = internet?.second == true)
         }
+    }
+
+    /**
+     * Seleciona, por DADOS, a rede do chassi (pela sub-rede) e a de internet (pela capacidade),
+     * amarra o processo à do chassi quando fizer sentido, e publica o inventário das redes na tela.
+     * Retorna (redeDeInternet, precisaAmarrarMqtt) para o MQTT.
+     */
+    private fun applyDualHoming(): Pair<Network?, Boolean>? {
+        // Internet é capturada ANTES do bind (depois, getActiveNetwork passa a ser a rede amarrada).
+        val internet = networkRouter.findInternetNetwork(config.mqttForceCellular)
+        val chassi = networkRouter.findChassisNetwork(config.chassisIp)
+        var bound = false
+        if (config.dualHoming && chassi != null && chassi != internet) {
+            bound = networkRouter.bindProcess(chassi)
+        }
+        val diag = networkRouter.describe(config.chassisIp) +
+            "\n→ chassi=${chassi ?: "NÃO ACHADA"} internet=${internet ?: "—"} bind=${if (bound) "SIM" else "não"}"
+        Log.i(TAG, "Redes:\n$diag")
+        StatusBus.update { it.copy(netInfo = diag) }
+        return internet to (bound && internet != null)
     }
 
     /** Recarrega config (settings) e reconecta tudo — usado pelo botão "Reiniciar ponte". */
@@ -152,13 +169,10 @@ class BridgeService : Service() {
             runCatching { chassis.disconnect() }
             config = BridgeConfig.load(this@BridgeService)
             buildPipeline()
-            if (config.dualHoming) {
-                val ok = networkRouter.bindChassisToEthernet(4000)
-                Log.i(TAG, "Dual-homing (restart): bind à Ethernet ${if (ok) "OK" else "indisponível"}")
-            }
+            val internet = applyDualHoming()
             chassis.connect()
             motionSdk.inicializarConexaoRobo()
-            mqtt.connect()
+            mqtt.connect(internet?.first, bindMqtt = internet?.second == true)
         }
     }
 

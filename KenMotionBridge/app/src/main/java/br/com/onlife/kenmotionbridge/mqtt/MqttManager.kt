@@ -1,10 +1,7 @@
 package br.com.onlife.kenmotionbridge.mqtt
 
 import android.content.Context
-import android.net.ConnectivityManager
 import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.os.Build
 import android.util.Log
 import br.com.onlife.kenmotionbridge.BridgeConfig
@@ -29,7 +26,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLException
 import javax.net.ssl.SSLHandshakeException
@@ -47,16 +43,14 @@ import javax.net.ssl.X509TrustManager
  * Em caso de falha, reporta o MOTIVO exato (auth, host inacessível, TLS handshake) via
  * [onConnectionChanged] para que a tela mostre o erro real em vez de só "DESCONECTADO".
  *
- * Split de rotas (Fase 2): se [BridgeConfig.mqttForceCellular] estiver ligado, o socket do
- * MQTT é amarrado à rede CELULAR (4G/USB), deixando o Wi-Fi livre para a rede local do robô
- * (chassi 192.168.99.x). Assim chassi e broker funcionam ao mesmo tempo.
+ * Split de rotas (dual-homing): quando o serviço amarra o PROCESSO à rede do chassi (que não tem
+ * internet), ele passa em [connect] a rede de INTERNET e `bindMqtt=true`; então o socket do MQTT
+ * é amarrado a essa rede via [InternetSslSocketFactory]/[ReResolvingSocket] (DNS e saída pela rede
+ * de internet), mantendo o hostname na URI — SNI e verificação TLS intactos.
  *
- * Reconexão robusta (Fase 11): em vez do auto-reconnect do Paho — que reaproveita a mesma
- * `socketFactory` com uma instância de [Network] capturada UMA vez — fazemos a reconexão por
- * conta própria. A cada tentativa o cliente e a `socketFactory` são RECONSTRUÍDOS, re-amarrando
- * o socket à rede celular ATUAL. Um [ConnectivityManager.NetworkCallback] persistente observa a
- * celular/USB e força reconexão quando a instância de rede troca (causa raiz do erro
- * "Software caused connection abort": socket preso a uma rede que deixou de existir).
+ * Reconexão robusta: em vez do auto-reconnect do Paho — que reaproveita a mesma `socketFactory`
+ * com uma instância de [Network] capturada UMA vez — fazemos a reconexão por conta própria, com
+ * backoff exponencial, reconstruindo cliente + `socketFactory` a cada tentativa.
  */
 class MqttManager(
     private val context: Context,
@@ -80,16 +74,15 @@ class MqttManager(
     }
 
     private var client: MqttAsyncClient? = null
-    private var internetCallback: ConnectivityManager.NetworkCallback? = null
-
-    /** Rede de INTERNET ATUAL (Wi-Fi/4G/USB) para o socket do MQTT. null = indisponível. */
-    private val internetNet = AtomicReference<Network?>()
 
     /**
-     * Amarrar o MQTT à rede de internet é necessário quando o processo está roteado para outra
-     * rede (dual-homing: processo na Ethernet do chassi) OU quando se força a saída pela celular.
+     * Rede de INTERNET escolhida pelo serviço (capturada ANTES do bind do processo). Quando o
+     * processo está roteado para a rede do chassi, o socket do MQTT é amarrado a esta rede.
      */
-    private val bindInternet: Boolean get() = config.dualHoming || config.mqttForceCellular
+    @Volatile private var internetNet: Network? = null
+
+    /** Se true, amarra o socket do MQTT a [internetNet] (cenário dual-homing). */
+    @Volatile private var bindMqtt = false
 
     /** Verdadeiro entre [connect] e [disconnect]; controla se devemos reagendar reconexões. */
     @Volatile private var wantConnected = false
@@ -103,9 +96,14 @@ class MqttManager(
         }
     private var pending: ScheduledFuture<*>? = null
 
-    fun connect() {
+    /**
+     * @param internetNet rede com internet a usar no socket (Wi-Fi/4G/USB), ou null p/ rota padrão.
+     * @param bindMqtt    quando true, amarra o socket a [internetNet] (processo roteado p/ o chassi).
+     */
+    fun connect(internetNet: Network? = null, bindMqtt: Boolean = false) {
         wantConnected = true
-        if (bindInternet) registerInternetCallback()
+        this.internetNet = internetNet
+        this.bindMqtt = bindMqtt && internetNet != null
         doConnect()
     }
 
@@ -135,19 +133,14 @@ class MqttManager(
                 // TLS habilitado para ssl:// e wss:// (SSLSocketFactory padrão do sistema).
                 if (config.mqttUri.startsWith("ssl") || config.mqttUri.startsWith("wss")) {
                     val base = buildSslContext().socketFactory
-                    // Split de rotas: amarra o socket TLS à rede de INTERNET (Wi-Fi/4G/USB), de
-                    // modo que funcione mesmo com o processo roteado para a Ethernet do chassi.
-                    socketFactory = if (bindInternet && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        val net = awaitInternet(6000)
-                        if (net != null) {
-                            val host = BridgeConfig.hostFromUri(config.mqttUri)
-                            val port = BridgeConfig.portFromUri(config.mqttUri)
-                            Log.i(TAG, "MQTT amarrado à rede de INTERNET ($net) para $host:$port")
-                            InternetSslSocketFactory(net, base, host, port)
-                        } else {
-                            Log.w(TAG, "bindInternet ligado, mas rede de internet indisponível — usando rota padrão")
-                            base
-                        }
+                    // Split de rotas: amarra o socket TLS à rede de INTERNET escolhida pelo serviço,
+                    // de modo que funcione mesmo com o processo roteado para a rede do chassi.
+                    val net = internetNet
+                    socketFactory = if (bindMqtt && net != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        val host = BridgeConfig.hostFromUri(config.mqttUri)
+                        val port = BridgeConfig.portFromUri(config.mqttUri)
+                        Log.i(TAG, "MQTT amarrado à rede de INTERNET ($net) para $host:$port")
+                        InternetSslSocketFactory(net, base, host, port)
                     } else base
                 }
             }
@@ -209,21 +202,6 @@ class MqttManager(
         }.getOrNull()
     }
 
-    /**
-     * Reconexão IMEDIATA disparada por troca de rede celular: o socket atual está preso a uma
-     * [Network] que deixou de valer, então reabrimos do zero (com a rede nova) sem esperar backoff.
-     */
-    @Synchronized
-    private fun reconnectNow(reason: String) {
-        if (!wantConnected) return
-        Log.i(TAG, "Reconexão imediata: $reason")
-        attempt = 0
-        pending?.cancel(false)
-        closeClientQuietly()
-        pending = runCatching {
-            reconnectExec.schedule({ doConnect() }, 300, TimeUnit.MILLISECONDS)
-        }.getOrNull()
-    }
 
     private fun subscribeCmd() {
         runCatching { client?.subscribe(config.topicCmd, 0) }
@@ -251,13 +229,7 @@ class MqttManager(
             pending = null
         }
         closeClientQuietly()
-        internetCallback?.let { cb ->
-            runCatching {
-                context.getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(cb)
-            }
-        }
-        internetCallback = null
-        internetNet.set(null)
+        internetNet = null
         runCatching { reconnectExec.shutdownNow() }
     }
 
@@ -268,53 +240,6 @@ class MqttManager(
         runCatching { c.setCallback(null) }
         runCatching { if (c.isConnected) c.disconnectForcibly(0, 0) }
         runCatching { c.close(true) }
-    }
-
-    /**
-     * Registra (uma vez) o callback da rede de INTERNET. Mantém [internetNet] apontando para a
-     * rede atual (Wi-Fi/4G/USB) e força reconexão quando a instância troca — para o socket TLS não
-     * ficar preso a uma rede morta (causa do "connection abort" intermitente). Se [config.mqttForceCellular]
-     * estiver ligado, restringe a busca à rede CELULAR; senão aceita qualquer rede com internet.
-     */
-    private fun registerInternetCallback() {
-        if (internetCallback != null) return
-        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return
-        val builder = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-        if (config.mqttForceCellular) builder.addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
-        val cb = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                val prev = internetNet.getAndSet(network)
-                if (prev != null && prev != network) {
-                    // Rede nova (ou trocada): re-amarrar o socket a ela.
-                    reconnectNow("rede de internet trocou de instância")
-                }
-            }
-            override fun onLost(network: Network) {
-                // Só limpa se for a rede que estávamos usando.
-                internetNet.compareAndSet(network, null)
-            }
-        }
-        runCatching {
-            cm.requestNetwork(builder.build(), cb)
-            internetCallback = cb
-        }.onFailure { Log.w(TAG, "Falha ao registrar callback de rede de internet: ${it.message}") }
-    }
-
-    /** Aguarda (poll) a rede de internet ficar disponível, até [timeoutMs]. */
-    private fun awaitInternet(timeoutMs: Long): Network? {
-        internetNet.get()?.let { return it }
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                Thread.sleep(150)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-                break
-            }
-            internetNet.get()?.let { return it }
-        }
-        return internetNet.get()
     }
 
     /**

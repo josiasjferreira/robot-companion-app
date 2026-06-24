@@ -38,16 +38,19 @@ As fases **2** (rede do chassi) e **3** (web → MQTT) são as que destravam o f
   celular/USB troca de instância.
   - Arquivos: `mqtt/MqttManager.kt`, teste `app/src/test/.../MqttBackoffTest.kt`,
     `app/build.gradle` (JUnit), `.github/workflows/android-build.yml` (passo `testDebugUnitTest`).
-- [x] **12. Dual-homing real (chassi Ethernet + internet Wi-Fi)** — topologia confirmada nas telas do
-  tablet: chassi na LAN **Ethernet** `192.168.99.x` (tablet `.200` → chassi `.2`), **sem internet**;
-  internet via **Wi-Fi** (hotspot). O Android roteava tudo pelo Wi-Fi (rede padrão), então o socket
-  do RobotSDK não alcançava o chassi. Correção: `NetworkRouter` amarra o **processo** à Ethernet
-  (`bindProcessToNetwork`) para o SDK alcançar o chassi; o `MqttManager` amarra o socket do MQTT à
-  rede de **internet** (qualquer transporte) com DNS escopado e egresso por ela (`ReResolvingSocket`),
-  mantendo hostname/SNI/verificação TLS. Flag `dualHoming` (default true) em `BridgeConfig`.
+- [x] **12. Dual-homing dirigido por dados + diagnóstico de redes** — o tablet tem VÁRIAS redes ao
+  mesmo tempo (Wi-Fi do hotspot, USB/tethering do celular, Ethernet do chassi). A 1ª tentativa
+  (amarrar por `TRANSPORT_ETHERNET` + `requestNetwork` só por capacidade) **regrediu o MQTT** (DNS
+  falhava com o processo amarrado a rede sem internet) e não pegava a interface certa. Correção:
+  `NetworkRouter` agora acha a rede do **chassi pela SUB-REDE** (mesma /24 do IP do chassi) e a de
+  **internet pela capacidade** (`NET_CAPABILITY_INTERNET`, validada). O serviço captura a internet
+  ANTES de amarrar o processo ao chassi e a passa ao `MqttManager` (`connect(internetNet, bindMqtt)`),
+  que amarra o socket do MQTT via `ReResolvingSocket` (DNS+saída na rede de internet), mantendo
+  hostname/SNI/verificação TLS. A tela mostra um **inventário das redes** (`netInfo`) para diagnóstico.
   - Arquivos: `net/NetworkRouter.kt` (novo), `mqtt/MqttManager.kt`, `service/BridgeService.kt`,
-    `BridgeConfig.kt`, `assets/bridge_config.json`, `sdk/SlamwareChassis.kt` (mensagem de erro).
-  - Pendente: validar no robô (`adb logcat`), confirmar `getDCIsConnected` e comandos de movimento.
+    `BridgeConfig.kt` (flag `dualHoming`), `StatusBus.kt`, `MainActivity.kt`, `activity_main.xml`,
+    `assets/bridge_config.json`, `sdk/SlamwareChassis.kt`.
+  - Pendente: validar no robô lendo o bloco **"Redes (diagnóstico)"** na tela + `adb logcat`.
 
 ## Contrato MQTT atual (referência rápida)
 - `ken/motion/cmd` (web→ponte): `{type:"joystick",x,y,speed,boost}` · `{type:"stop"}` · `{type:"chassis",action,speed,angle,durationMs}`

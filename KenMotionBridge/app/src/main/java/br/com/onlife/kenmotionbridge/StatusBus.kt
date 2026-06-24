@@ -38,6 +38,8 @@ data class BridgeStatus(
     val charging: Boolean = false,
     /** Epoch (ms) da última telemetria válida lida do chassi (para detectar congelamento). */
     val telemetryAt: Long = 0L,
+    /** Inventário das redes do tablet (diagnóstico de roteamento dual-homing). */
+    val netInfo: String = "",
 )
 
 object StatusBus {
