@@ -215,16 +215,27 @@ class SlamwareChassis(
                 "NoSuchMethod: $PLATFORM_CLS.connect(String,int) — versão do AAR diferente da esperada"
             root is UnsatisfiedLinkError ->
                 "UnsatisfiedLinkError — biblioteca nativa (.so) do SDK ausente/ABI incompatível"
-            // Exceções do próprio Slamware (com.slamtec.slamware.exceptions.*).
-            simple.contains("ConnectionFail") || simple.contains("ConnectionTimeOut") ->
-                "Chassi inacessível — ${config.chassisIp}:${config.chassisPort} (sem rota; confira o cabo/LAN Ethernet do robô e o dual-homing)"
             simple.contains("Unauthorized") ->
                 "Não autorizado pelo chassi — sessão/login necessária (${root.message})"
-            root is java.net.ConnectException || root is java.net.SocketTimeoutException ||
-                root is java.net.UnknownHostException ->
-                "Chassi inacessível — ${config.chassisIp}:${config.chassisPort} (${root.message})"
-            else -> "Falha Slamware: $simple: ${root.message}"
+            // Para QUALQUER outra falha (inclui ConnectionFail/Timeout do Slamware) mostramos a
+            // cadeia CRUA de exceções: o errno nativo (ECONNREFUSED/ETIMEDOUT/ENETUNREACH) revela
+            // se é rede ou handshake. A porta 1445 abre no TCP (sonda), então isto é decisivo.
+            else -> "SDK: ${causeChain(t)}"
         }
+    }
+
+    /** Monta a cadeia completa de causas (classe: mensagem ← classe: mensagem ← …). */
+    private fun causeChain(t: Throwable): String {
+        val sb = StringBuilder()
+        var cur: Throwable? = t
+        var guard = 0
+        while (cur != null && guard++ < 8) {
+            if (sb.isNotEmpty()) sb.append(" ← ")
+            sb.append(cur.javaClass.simpleName)
+            cur.message?.let { sb.append(": ").append(it.take(120)) }
+            cur = cur.cause
+        }
+        return sb.toString()
     }
 
     /** Desempacota InvocationTargetException / ExceptionInInitializerError até a causa raiz. */
