@@ -11,7 +11,6 @@ import android.content.ServiceConnection
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -23,6 +22,7 @@ import br.com.onlife.kenmotionbridge.R
 import br.com.onlife.kenmotionbridge.ipc.IFeedbackSink
 import br.com.onlife.kenmotionbridge.ipc.IRobotControl
 import br.com.onlife.kenmotionbridge.mqtt.MqttManager
+import br.com.onlife.kenmotionbridge.net.NetworkRouter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,7 +32,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
-import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Processo `:mqtt` da ponte (Solução 1 — dual-homing por processo).
@@ -55,13 +54,15 @@ class MqttBridgeService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var heartbeatJob: Job? = null
+    private var netLoopJob: Job? = null
 
     private lateinit var config: BridgeConfig
     private lateinit var mqtt: MqttManager
+    private val networkRouter by lazy { NetworkRouter(this) }
     private var wakeLock: PowerManager.WakeLock? = null
 
-    private val internetNet = AtomicReference<Network?>()
-    private var netCallback: ConnectivityManager.NetworkCallback? = null
+    /** Rede de internet atualmente amarrada ao processo :mqtt (a que alcança o broker). */
+    @Volatile private var boundNet: Network? = null
 
     @Volatile private var robot: IRobotControl? = null
     @Volatile private var lastFeedbackAt = 0L
@@ -115,8 +116,8 @@ class MqttBridgeService : Service() {
             onCommand = { payload -> forwardCommand(payload) },
         )
 
-        bindInternetThenConnect()
         bindToRobot()
+        startNetworkLoop()
         startHeartbeat()
     }
 
@@ -136,35 +137,51 @@ class MqttBridgeService : Service() {
         }
     }
 
-    /** Amarra o processo :mqtt à rede com internet (tethering/hotspot) e conecta o broker. */
-    private fun bindInternetThenConnect() {
+    /**
+     * Seleciona, por DADOS, a rede que REALMENTE alcança o broker (sonda L4 com DNS escopado),
+     * amarra o processo :mqtt a ela e (re)conecta o broker. Evita o falso-positivo do "INET val=OK"
+     * da rede do chassi. Reavalia a cada 5 s e quando a internet troca. Publica o diagnóstico do
+     * lado MQTT na tela via [IRobotControl.reportMqttStatus].
+     */
+    private fun startNetworkLoop() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) { mqtt.reconnectNow("sem bind (API<23)"); return }
+        val host = BridgeConfig.hostFromUri(config.mqttUri)
+        val port = BridgeConfig.portFromUri(config.mqttUri)
         val cm = getSystemService(ConnectivityManager::class.java)
-        if (cm == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            mqtt.connect(); return
-        }
-        val req = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-            .build()
-        val cb = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                val prev = internetNet.getAndSet(network)
-                runCatching { cm.bindProcessToNetwork(network) }
-                    .onFailure { Log.w(TAG, "bindProcessToNetwork(internet) falhou: ${it.message}") }
-                Log.i(TAG, "Internet disponível ($network) — :mqtt amarrado; conectando broker")
-                if (prev == null) mqtt.connect() else mqtt.reconnectNow("rede de internet trocou")
-            }
-            override fun onLost(network: Network) {
-                if (internetNet.compareAndSet(network, null)) {
-                    Log.w(TAG, "Internet perdida — broker pode cair até nova rede")
+        netLoopJob = scope.launch {
+            while (isActive) {
+                if (!mqttUp && cm != null) {
+                    val net = pickInternetNetwork(host, port)
+                    if (net != null) {
+                        if (net != boundNet) {
+                            runCatching { cm.bindProcessToNetwork(net) }
+                            boundNet = net
+                            Log.i(TAG, "Internet que alcança o broker: $net — :mqtt amarrado")
+                            mqtt.reconnectNow("rede de internet selecionada")
+                        }
+                        report(false, "conectando ao broker via $net…")
+                    } else {
+                        runCatching { cm.bindProcessToNetwork(null) }
+                        boundNet = null
+                        report(false, "sem internet — nenhuma rede alcança $host:$port (ative o tethering USB)")
+                    }
                 }
+                delay(5000L)
             }
         }
-        runCatching { cm.requestNetwork(req, cb); netCallback = cb }
-            .onFailure {
-                Log.w(TAG, "requestNetwork(internet) falhou: ${it.message}; usando rota padrão")
-                mqtt.connect()
-            }
+    }
+
+    /** Primeira rede com INTERNET cuja sonda L4 alcança o broker (DNS escopado + TCP). */
+    private fun pickInternetNetwork(host: String, port: Int): Network? {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return null
+        val candidates = cm.allNetworks.filter {
+            cm.getNetworkCapabilities(it)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        }
+        return candidates.firstOrNull { networkRouter.probeTcp(host, port, it) == "OK" }
+    }
+
+    private fun report(connected: Boolean, msg: String) {
+        runCatching { robot?.reportMqttStatus(connected, msg) }
     }
 
     private fun bindToRobot() {
@@ -230,9 +247,9 @@ class MqttBridgeService : Service() {
 
     override fun onDestroy() {
         heartbeatJob?.cancel()
+        netLoopJob?.cancel()
         runCatching { robot?.unregisterFeedback(feedbackSink) }
         runCatching { unbindService(robotConn) }
-        netCallback?.let { cb -> runCatching { getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(cb) } }
         runCatching { mqtt.disconnect() }
         runCatching { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) getSystemService(ConnectivityManager::class.java)?.bindProcessToNetwork(null) }
         runCatching { wakeLock?.release() }
