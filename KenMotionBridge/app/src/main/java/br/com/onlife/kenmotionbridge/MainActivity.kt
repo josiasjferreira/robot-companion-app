@@ -11,7 +11,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import br.com.onlife.kenmotionbridge.databinding.ActivityMainBinding
-import br.com.onlife.kenmotionbridge.service.BridgeService
+import br.com.onlife.kenmotionbridge.service.MqttBridgeService
+import br.com.onlife.kenmotionbridge.service.RobotBridgeService
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -27,22 +28,20 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnRestart.setOnClickListener {
             ensureNotificationPermission()
-            // (Re)inicia a ponte e força reconexão ao broker com a config atual.
-            ContextCompat.startForegroundService(
-                this,
-                Intent(this, BridgeService::class.java).apply { action = BridgeService.ACTION_RESTART }
-            )
+            // (Re)inicia AMBOS os processos (chassi + :mqtt) e força reconexão com a config atual.
+            startBridge(RobotBridgeService.ACTION_RESTART)
         }
         binding.btnStop.setOnClickListener {
-            startService(Intent(this, BridgeService::class.java).apply { action = BridgeService.ACTION_STOP })
+            startService(Intent(this, RobotBridgeService::class.java).apply { action = RobotBridgeService.ACTION_STOP })
+            startService(Intent(this, MqttBridgeService::class.java).apply { action = RobotBridgeService.ACTION_STOP })
         }
         binding.btnSettings.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
 
         ensureNotificationPermission()
-        // Inicia a ponte e conecta ao broker automaticamente assim que a tela abre.
-        ContextCompat.startForegroundService(this, Intent(this, BridgeService::class.java))
+        // Inicia os dois processos da ponte automaticamente assim que a tela abre.
+        startBridge(null)
 
         observeStatus()
     }
@@ -91,6 +90,16 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /** Sobe os dois serviços de foreground (processo principal + :mqtt) com a ação opcional. */
+    private fun startBridge(action: String?) {
+        ContextCompat.startForegroundService(
+            this, Intent(this, RobotBridgeService::class.java).apply { action?.let { this.action = it } }
+        )
+        ContextCompat.startForegroundService(
+            this, Intent(this, MqttBridgeService::class.java).apply { action?.let { this.action = it } }
+        )
     }
 
     private fun onOff(v: Boolean) = if (v) "CONECTADO ✅" else "DESCONECTADO ❌"

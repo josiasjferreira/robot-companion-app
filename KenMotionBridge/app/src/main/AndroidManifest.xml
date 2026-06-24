@@ -47,8 +47,18 @@
             android:exported="false"
             android:parentActivityName=".MainActivity" />
 
+        <!-- Processo PRINCIPAL: chassi (amarra à rede do robô 192.168.99.x) -->
         <service
-            android:name=".service.BridgeService"
+            android:name=".service.RobotBridgeService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Processo :mqtt ISOLADO: broker (amarra à rede de internet do tethering/hotspot).
+             Cada processo tem seu próprio bindProcessToNetwork — resolve o dual-homing. -->
+        <service
+            android:name=".service.MqttBridgeService"
+            android:process=":mqtt"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />

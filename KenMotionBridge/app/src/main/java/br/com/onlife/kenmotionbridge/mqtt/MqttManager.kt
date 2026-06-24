@@ -202,6 +202,23 @@ class MqttManager(
         }.getOrNull()
     }
 
+    /**
+     * Reconexão IMEDIATA (sem backoff) — usada quando a rede de internet troca de instância: o
+     * socket atual pode estar preso a uma rede que deixou de valer. Reabre do zero. Se ainda não
+     * havia sido conectado, apenas inicia a conexão.
+     */
+    @Synchronized
+    fun reconnectNow(reason: String) {
+        if (!wantConnected) { connect(); return }
+        Log.i(TAG, "Reconexão imediata: $reason")
+        attempt = 0
+        pending?.cancel(false)
+        closeClientQuietly()
+        pending = runCatching {
+            reconnectExec.schedule({ doConnect() }, 300, TimeUnit.MILLISECONDS)
+        }.getOrNull()
+    }
+
 
     private fun subscribeCmd() {
         runCatching { client?.subscribe(config.topicCmd, 0) }

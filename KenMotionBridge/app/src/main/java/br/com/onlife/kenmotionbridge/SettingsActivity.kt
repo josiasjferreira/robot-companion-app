@@ -6,7 +6,8 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import br.com.onlife.kenmotionbridge.databinding.ActivitySettingsBinding
-import br.com.onlife.kenmotionbridge.service.BridgeService
+import br.com.onlife.kenmotionbridge.service.MqttBridgeService
+import br.com.onlife.kenmotionbridge.service.RobotBridgeService
 
 /**
  * Tela de configurações do broker MQTT (HOST / porta / usuário / senha).
@@ -47,10 +48,14 @@ class SettingsActivity : AppCompatActivity() {
 
         BridgeConfig.saveSettings(this, host, port, user, pass, forceCellular)
 
-        // Reinicia a ponte para aplicar imediatamente (reconecta ao broker).
+        // Reinicia os dois processos da ponte para aplicar imediatamente (reconecta ao broker).
         ContextCompat.startForegroundService(
             this,
-            Intent(this, BridgeService::class.java).apply { action = BridgeService.ACTION_RESTART }
+            Intent(this, RobotBridgeService::class.java).apply { action = RobotBridgeService.ACTION_RESTART }
+        )
+        ContextCompat.startForegroundService(
+            this,
+            Intent(this, MqttBridgeService::class.java).apply { action = RobotBridgeService.ACTION_RESTART }
         )
         Toast.makeText(this, "Configurações salvas — reconectando…", Toast.LENGTH_SHORT).show()
         finish()
