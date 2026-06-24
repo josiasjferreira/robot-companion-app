@@ -38,6 +38,16 @@ As fases **2** (rede do chassi) e **3** (web → MQTT) são as que destravam o f
   celular/USB troca de instância.
   - Arquivos: `mqtt/MqttManager.kt`, teste `app/src/test/.../MqttBackoffTest.kt`,
     `app/build.gradle` (JUnit), `.github/workflows/android-build.yml` (passo `testDebugUnitTest`).
+- [x] **12. Dual-homing real (chassi Ethernet + internet Wi-Fi)** — topologia confirmada nas telas do
+  tablet: chassi na LAN **Ethernet** `192.168.99.x` (tablet `.200` → chassi `.2`), **sem internet**;
+  internet via **Wi-Fi** (hotspot). O Android roteava tudo pelo Wi-Fi (rede padrão), então o socket
+  do RobotSDK não alcançava o chassi. Correção: `NetworkRouter` amarra o **processo** à Ethernet
+  (`bindProcessToNetwork`) para o SDK alcançar o chassi; o `MqttManager` amarra o socket do MQTT à
+  rede de **internet** (qualquer transporte) com DNS escopado e egresso por ela (`ReResolvingSocket`),
+  mantendo hostname/SNI/verificação TLS. Flag `dualHoming` (default true) em `BridgeConfig`.
+  - Arquivos: `net/NetworkRouter.kt` (novo), `mqtt/MqttManager.kt`, `service/BridgeService.kt`,
+    `BridgeConfig.kt`, `assets/bridge_config.json`, `sdk/SlamwareChassis.kt` (mensagem de erro).
+  - Pendente: validar no robô (`adb logcat`), confirmar `getDCIsConnected` e comandos de movimento.
 
 ## Contrato MQTT atual (referência rápida)
 - `ken/motion/cmd` (web→ponte): `{type:"joystick",x,y,speed,boost}` · `{type:"stop"}` · `{type:"chassis",action,speed,angle,durationMs}`

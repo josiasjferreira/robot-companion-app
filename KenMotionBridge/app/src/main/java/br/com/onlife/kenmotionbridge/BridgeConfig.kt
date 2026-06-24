@@ -21,6 +21,13 @@ data class BridgeConfig(
     val tlsInsecure: Boolean,
     /** Amarra o socket do MQTT à rede celular (4G/USB) — split de rotas com o Wi-Fi do robô. */
     val mqttForceCellular: Boolean,
+    /**
+     * Dual-homing do tablet do robô: o CHASSI fica numa LAN Ethernet sem internet
+     * (ex.: 192.168.99.x) e a INTERNET vem por outra rede (Wi-Fi/4G/USB). Quando ligado:
+     *  - o PROCESSO é amarrado à Ethernet (para o RobotSDK alcançar o chassi);
+     *  - o socket do MQTT é amarrado à rede de internet (com DNS escopado nela).
+     */
+    val dualHoming: Boolean,
     // Tópicos
     val topicCmd: String,
     val topicFeedback: String,
@@ -113,6 +120,7 @@ data class BridgeConfig(
                 keepAliveSec = mqtt.optInt("keepAliveSec", 30),
                 tlsInsecure = mqtt.optBoolean("tlsInsecure", false),
                 mqttForceCellular = sp.getBoolean(KEY_FORCE_CELL, mqtt.optBoolean("forceCellular", false)),
+                dualHoming = mqtt.optBoolean("dualHoming", true),
                 topicCmd = topics.optString("cmd", "ken/motion/cmd"),
                 topicFeedback = topics.optString("feedback", "ken/motion/feedback"),
                 topicTelemetry = topics.optString("telemetry", "ken/sensors/telemetry"),

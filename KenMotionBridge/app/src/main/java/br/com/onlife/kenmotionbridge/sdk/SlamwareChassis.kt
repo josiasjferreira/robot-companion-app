@@ -217,7 +217,7 @@ class SlamwareChassis(
                 "UnsatisfiedLinkError — biblioteca nativa (.so) do SDK ausente/ABI incompatível"
             // Exceções do próprio Slamware (com.slamtec.slamware.exceptions.*).
             simple.contains("ConnectionFail") || simple.contains("ConnectionTimeOut") ->
-                "Chassi inacessível — ${config.chassisIp}:${config.chassisPort} (verifique se o tablet está na rede do robô)"
+                "Chassi inacessível — ${config.chassisIp}:${config.chassisPort} (sem rota; confira o cabo/LAN Ethernet do robô e o dual-homing)"
             simple.contains("Unauthorized") ->
                 "Não autorizado pelo chassi — sessão/login necessária (${root.message})"
             root is java.net.ConnectException || root is java.net.SocketTimeoutException ||

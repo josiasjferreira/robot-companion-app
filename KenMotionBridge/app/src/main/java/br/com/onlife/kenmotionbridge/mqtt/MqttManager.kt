@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.Build
 import android.util.Log
 import br.com.onlife.kenmotionbridge.BridgeConfig
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
@@ -17,7 +18,9 @@ import org.eclipse.paho.client.mqttv3.MqttSecurityException
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import java.net.ConnectException
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketAddress
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.security.SecureRandom
@@ -77,10 +80,16 @@ class MqttManager(
     }
 
     private var client: MqttAsyncClient? = null
-    private var cellularCallback: ConnectivityManager.NetworkCallback? = null
+    private var internetCallback: ConnectivityManager.NetworkCallback? = null
 
-    /** Rede celular/USB ATUAL (atualizada pelo callback). null = indisponível no momento. */
-    private val cellularNet = AtomicReference<Network?>()
+    /** Rede de INTERNET ATUAL (Wi-Fi/4G/USB) para o socket do MQTT. null = indisponível. */
+    private val internetNet = AtomicReference<Network?>()
+
+    /**
+     * Amarrar o MQTT à rede de internet é necessário quando o processo está roteado para outra
+     * rede (dual-homing: processo na Ethernet do chassi) OU quando se força a saída pela celular.
+     */
+    private val bindInternet: Boolean get() = config.dualHoming || config.mqttForceCellular
 
     /** Verdadeiro entre [connect] e [disconnect]; controla se devemos reagendar reconexões. */
     @Volatile private var wantConnected = false
@@ -96,7 +105,7 @@ class MqttManager(
 
     fun connect() {
         wantConnected = true
-        if (config.mqttForceCellular) registerCellularCallback()
+        if (bindInternet) registerInternetCallback()
         doConnect()
     }
 
@@ -126,16 +135,17 @@ class MqttManager(
                 // TLS habilitado para ssl:// e wss:// (SSLSocketFactory padrão do sistema).
                 if (config.mqttUri.startsWith("ssl") || config.mqttUri.startsWith("wss")) {
                     val base = buildSslContext().socketFactory
-                    // Split de rotas: amarra o socket TLS à rede celular ATUAL, se solicitado.
-                    socketFactory = if (config.mqttForceCellular) {
-                        val net = awaitCellular(6000)
+                    // Split de rotas: amarra o socket TLS à rede de INTERNET (Wi-Fi/4G/USB), de
+                    // modo que funcione mesmo com o processo roteado para a Ethernet do chassi.
+                    socketFactory = if (bindInternet && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        val net = awaitInternet(6000)
                         if (net != null) {
                             val host = BridgeConfig.hostFromUri(config.mqttUri)
                             val port = BridgeConfig.portFromUri(config.mqttUri)
-                            Log.i(TAG, "MQTT amarrado à rede CELULAR (4G/USB) para $host:$port")
-                            CellularSslSocketFactory(net, base, host, port)
+                            Log.i(TAG, "MQTT amarrado à rede de INTERNET ($net) para $host:$port")
+                            InternetSslSocketFactory(net, base, host, port)
                         } else {
-                            Log.w(TAG, "forceCellular ligado, mas rede celular indisponível — usando rota padrão")
+                            Log.w(TAG, "bindInternet ligado, mas rede de internet indisponível — usando rota padrão")
                             base
                         }
                     } else base
@@ -241,13 +251,13 @@ class MqttManager(
             pending = null
         }
         closeClientQuietly()
-        cellularCallback?.let { cb ->
+        internetCallback?.let { cb ->
             runCatching {
                 context.getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(cb)
             }
         }
-        cellularCallback = null
-        cellularNet.set(null)
+        internetCallback = null
+        internetNet.set(null)
         runCatching { reconnectExec.shutdownNow() }
     }
 
@@ -261,39 +271,39 @@ class MqttManager(
     }
 
     /**
-     * Registra (uma vez) o callback da rede CELULAR. Mantém [cellularNet] sempre apontando para a
-     * rede 4G/USB atual e força reconexão quando a instância troca — para o socket TLS não ficar
-     * preso a uma rede morta (causa do "connection abort" intermitente).
+     * Registra (uma vez) o callback da rede de INTERNET. Mantém [internetNet] apontando para a
+     * rede atual (Wi-Fi/4G/USB) e força reconexão quando a instância troca — para o socket TLS não
+     * ficar preso a uma rede morta (causa do "connection abort" intermitente). Se [config.mqttForceCellular]
+     * estiver ligado, restringe a busca à rede CELULAR; senão aceita qualquer rede com internet.
      */
-    private fun registerCellularCallback() {
-        if (cellularCallback != null) return
+    private fun registerInternetCallback() {
+        if (internetCallback != null) return
         val cm = context.getSystemService(ConnectivityManager::class.java) ?: return
-        val req = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+        val builder = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
+        if (config.mqttForceCellular) builder.addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                val prev = cellularNet.getAndSet(network)
-                if (prev != network) {
+                val prev = internetNet.getAndSet(network)
+                if (prev != null && prev != network) {
                     // Rede nova (ou trocada): re-amarrar o socket a ela.
-                    if (prev != null) reconnectNow("rede celular trocou de instância")
+                    reconnectNow("rede de internet trocou de instância")
                 }
             }
             override fun onLost(network: Network) {
                 // Só limpa se for a rede que estávamos usando.
-                cellularNet.compareAndSet(network, null)
+                internetNet.compareAndSet(network, null)
             }
         }
         runCatching {
-            cm.requestNetwork(req, cb)
-            cellularCallback = cb
-        }.onFailure { Log.w(TAG, "Falha ao registrar callback de rede celular: ${it.message}") }
+            cm.requestNetwork(builder.build(), cb)
+            internetCallback = cb
+        }.onFailure { Log.w(TAG, "Falha ao registrar callback de rede de internet: ${it.message}") }
     }
 
-    /** Aguarda (poll) a rede celular ficar disponível, até [timeoutMs]. */
-    private fun awaitCellular(timeoutMs: Long): Network? {
-        cellularNet.get()?.let { return it }
+    /** Aguarda (poll) a rede de internet ficar disponível, até [timeoutMs]. */
+    private fun awaitInternet(timeoutMs: Long): Network? {
+        internetNet.get()?.let { return it }
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -302,17 +312,21 @@ class MqttManager(
                 Thread.currentThread().interrupt()
                 break
             }
-            cellularNet.get()?.let { return it }
+            internetNet.get()?.let { return it }
         }
-        return cellularNet.get()
+        return internetNet.get()
     }
 
     /**
-     * SSLSocketFactory que cria o socket de transporte AMARRADO a uma [Network] específica
-     * (celular) e o envelopa em TLS. O Paho usa `createSocket()` (sem args) e depois `connect()`;
-     * por isso o socket base (não conectado, já vinculado à rede) é envelopado e conectado pelo Paho.
+     * SSLSocketFactory que amarra o transporte do MQTT a uma [network] de internet específica e o
+     * envelopa em TLS, mantendo o HOSTNAME na URI (logo SNI e verificação de certificado seguem
+     * corretos). O socket base é um [ReResolvingSocket]: ele resolve o DNS e egressa **pela rede de
+     * internet**, mesmo que o PROCESSO esteja roteado para outra rede (Ethernet do chassi).
+     *
+     * O Paho usa `createSocket()` (sem args) e depois chama `connect()` no SSLSocket, que delega ao
+     * socket base — por isso o [ReResolvingSocket] intercepta a resolução/saída no momento certo.
      */
-    private class CellularSslSocketFactory(
+    private class InternetSslSocketFactory(
         private val network: Network,
         private val delegate: SSLSocketFactory,
         private val host: String,
@@ -320,20 +334,35 @@ class MqttManager(
     ) : SSLSocketFactory() {
         override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
         override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
-        override fun createSocket(): Socket {
-            val base = network.socketFactory.createSocket()   // não conectado, vinculado ao celular
-            return delegate.createSocket(base, host, port, true)
-        }
+        override fun createSocket(): Socket =
+            delegate.createSocket(ReResolvingSocket(network), host, port, true)
         override fun createSocket(h: String?, p: Int): Socket =
-            delegate.createSocket(network.socketFactory.createSocket(h, p), host, port, true)
+            delegate.createSocket(ReResolvingSocket(network), host, port, true)
         override fun createSocket(h: String?, p: Int, lh: InetAddress?, lp: Int): Socket =
-            delegate.createSocket(network.socketFactory.createSocket(h, p, lh, lp), host, port, true)
+            delegate.createSocket(ReResolvingSocket(network), host, port, true)
         override fun createSocket(a: InetAddress?, p: Int): Socket =
-            delegate.createSocket(network.socketFactory.createSocket(a, p), host, port, true)
+            delegate.createSocket(ReResolvingSocket(network), host, port, true)
         override fun createSocket(a: InetAddress?, p: Int, lh: InetAddress?, lp: Int): Socket =
-            delegate.createSocket(network.socketFactory.createSocket(a, p, lh, lp), host, port, true)
+            delegate.createSocket(ReResolvingSocket(network), host, port, true)
         override fun createSocket(s: Socket?, h: String?, p: Int, autoClose: Boolean): Socket =
             delegate.createSocket(s, h, p, autoClose)
+    }
+
+    /**
+     * Socket cuja resolução de nome e saída são forçadas para uma [network] específica. Ao conectar,
+     * resolve o host via DNS ESCOPADO da rede ([Network.getAllByName]) e amarra o próprio socket a
+     * ela ([Network.bindSocket]) — assim o MQTT alcança a internet mesmo com o processo amarrado à
+     * Ethernet do chassi (cujo DNS/rota não chegam à internet).
+     */
+    private class ReResolvingSocket(private val network: Network) : Socket() {
+        override fun connect(endpoint: SocketAddress, timeout: Int) {
+            val isa = endpoint as InetSocketAddress
+            val name = isa.hostString ?: isa.address?.hostAddress ?: throw UnknownHostException("host nulo")
+            val resolved = network.getAllByName(name).firstOrNull() ?: throw UnknownHostException(name)
+            if (!isBound) runCatching { bind(InetSocketAddress(0)) }   // cria o fd local
+            runCatching { network.bindSocket(this) }                   // egresso pela rede de internet
+            super.connect(InetSocketAddress(resolved, isa.port), timeout)
+        }
     }
 
     /**

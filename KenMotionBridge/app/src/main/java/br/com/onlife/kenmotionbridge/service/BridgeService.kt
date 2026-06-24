@@ -18,6 +18,7 @@ import br.com.onlife.kenmotionbridge.R
 import br.com.onlife.kenmotionbridge.StatusBus
 import br.com.onlife.kenmotionbridge.motion.MotionController
 import br.com.onlife.kenmotionbridge.mqtt.MqttManager
+import br.com.onlife.kenmotionbridge.net.NetworkRouter
 import br.com.onlife.kenmotionbridge.sdk.KenMotionSdk
 import br.com.onlife.kenmotionbridge.sdk.SlamwareChassis
 import kotlinx.coroutines.CoroutineScope
@@ -55,6 +56,7 @@ class BridgeService : Service() {
     private lateinit var motionSdk: KenMotionSdk
     private lateinit var motion: MotionController
     private lateinit var mqtt: MqttManager
+    private val networkRouter by lazy { NetworkRouter(this) }
     private var wakeLock: PowerManager.WakeLock? = null
     /** true logo após onCreate, para não reconectar em dobro quando o start traz ACTION_RESTART. */
     private var freshlyCreated = false
@@ -131,6 +133,11 @@ class BridgeService : Service() {
     /** Conecta chassi (SDK) e broker MQTT em background. O status do SDK chega pelo callback. */
     private fun connectAll() {
         scope.launch {
+            // Dual-homing: amarra o processo à Ethernet ANTES do SDK abrir o socket do chassi.
+            if (config.dualHoming) {
+                val ok = networkRouter.bindChassisToEthernet(4000)
+                Log.i(TAG, "Dual-homing: bind à Ethernet ${if (ok) "OK" else "indisponível"}")
+            }
             chassis.connect()
             motionSdk.inicializarConexaoRobo()
             mqtt.connect()
@@ -145,6 +152,10 @@ class BridgeService : Service() {
             runCatching { chassis.disconnect() }
             config = BridgeConfig.load(this@BridgeService)
             buildPipeline()
+            if (config.dualHoming) {
+                val ok = networkRouter.bindChassisToEthernet(4000)
+                Log.i(TAG, "Dual-homing (restart): bind à Ethernet ${if (ok) "OK" else "indisponível"}")
+            }
             chassis.connect()
             motionSdk.inicializarConexaoRobo()
             mqtt.connect()
@@ -287,6 +298,7 @@ class BridgeService : Service() {
         runCatching { motionSdk.liberar() }
         runCatching { mqtt.disconnect() }
         runCatching { chassis.disconnect() }
+        runCatching { networkRouter.release() }
         runCatching { wakeLock?.release() }
         scope.cancel()
         super.onDestroy()
