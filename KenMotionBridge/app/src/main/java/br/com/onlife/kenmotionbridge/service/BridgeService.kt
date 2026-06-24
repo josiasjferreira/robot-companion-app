@@ -142,11 +142,11 @@ class BridgeService : Service() {
     }
 
     /**
-     * Seleciona, por DADOS, a rede do chassi (pela sub-rede) e amarra o PROCESSO a ela, para o
-     * RobotSDK (que abre o próprio socket) alcançar o chassi. Decide a rota do MQTT:
-     *  - se a rede do chassi também tem internet validada, o MQTT usa o default (já é o chassi);
-     *  - senão, amarra o MQTT a outra rede com internet.
-     * Publica o inventário das redes na tela. Retorna (redeParaMqtt, precisaAmarrarMqtt).
+     * Seleciona, por DADOS, a rede do chassi (pela sub-rede, preferindo o cabo) e amarra o
+     * PROCESSO a ela, para o RobotSDK (que abre o próprio socket) alcançar o chassi. Roteia o MQTT
+     * para uma rede de internet DISTINTA da do chassi (hotspot), quando existir. Faz uma sonda TCP
+     * direta à porta do chassi para diagnóstico. Publica o inventário das redes na tela.
+     * Retorna (redeParaMqtt, precisaAmarrarMqtt).
      */
     private fun applyDualHoming(): Pair<Network?, Boolean>? {
         val chassi = networkRouter.findChassisNetwork(config.chassisIp)
@@ -154,17 +154,16 @@ class BridgeService : Service() {
         if (config.dualHoming && chassi != null) {
             bound = networkRouter.bindProcess(chassi)
         }
-        // Com o processo amarrado ao chassi: se o chassi tem internet, o MQTT vai pelo default.
-        // Senão, escolhemos outra rede com internet (capturada agora) e amarramos o socket a ela.
-        val chassiHasNet = chassi != null && networkRouter.hasInternet(chassi)
-        val mqttNet: Network? = when {
-            !bound -> null                       // sem bind: default do sistema já tem internet
-            chassiHasNet -> null                 // chassi tem internet: MQTT usa o default (= chassi)
-            else -> networkRouter.findInternetNetwork(config.mqttForceCellular, avoid = chassi)
-        }
+        // MQTT vai por uma internet DIFERENTE da do chassi (ex.: hotspot do celular). Se não houver,
+        // usa o default — não confiamos no "INET val=OK" da rede do chassi (costuma ser falso/cache).
+        val internet = networkRouter.findInternetNetwork(config.mqttForceCellular, avoid = chassi)
+        val mqttNet: Network? = if (bound && internet != null && internet != chassi) internet else null
+        // Sonda L4: o problema é rota/porta (TIMEOUT/RECUSADO) ou handshake do SDK (OK porta aberta)?
+        val probe = networkRouter.probeTcp(config.chassisIp, config.chassisPort, if (bound) chassi else null)
         val diag = networkRouter.describe(config.chassisIp) +
-            "\n→ chassi=${chassi ?: "NÃO ACHADA"} inet_chassi=$chassiHasNet bind=${if (bound) "SIM" else "não"} " +
-            "mqtt=${mqttNet?.toString() ?: "default"}"
+            "\n→ chassi=${chassi ?: "NÃO ACHADA"} bind=${if (bound) "SIM" else "não"} " +
+            "mqtt=${mqttNet?.toString() ?: "default"}" +
+            "\n→ TCP ${config.chassisIp}:${config.chassisPort} = $probe"
         Log.i(TAG, "Redes:\n$diag")
         StatusBus.update { it.copy(netInfo = diag) }
         return mqttNet to (mqttNet != null)

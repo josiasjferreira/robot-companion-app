@@ -44,26 +44,40 @@ class NetworkRouter(context: Context) {
         }
     }
 
-    /** A rede [net] tem internet validada? (INET + VALIDATED). */
-    fun hasInternet(net: Network): Boolean {
-        val c = cm?.getNetworkCapabilities(net) ?: return false
-        return c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            c.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-    }
-
-    /** Rede cujo endereço cai na MESMA /24 do [chassisIp] (ex.: 192.168.99.x). null = nenhuma. */
+    /** Rede cujo endereço cai na MESMA /24 do [chassisIp]. Prefere ETHERNET (cabo direto). */
     fun findChassisNetwork(chassisIp: String): Network? {
         val cm = cm ?: return null
         val prefix = chassisIp.substringBeforeLast('.', "")
         if (prefix.isEmpty()) return null
-        for (n in cm.allNetworks) {
-            val lp = cm.getLinkProperties(n) ?: continue
-            for (la in lp.linkAddresses) {
-                val a = la.address?.hostAddress ?: continue
-                if (a.substringBeforeLast('.', "") == prefix) return n
-            }
+        val matches = cm.allNetworks.filter { n ->
+            cm.getLinkProperties(n)?.linkAddresses?.any {
+                it.address?.hostAddress?.substringBeforeLast('.', "") == prefix
+            } == true
         }
-        return null
+        // Cabo (Ethernet) é o caminho direto/confiável; Wi-Fi do robô pode ter isolamento de cliente.
+        return matches.firstOrNull { n ->
+            cm.getNetworkCapabilities(n)?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
+        } ?: matches.firstOrNull()
+    }
+
+    /**
+     * Sonda L4: tenta um TCP connect a [ip]:[port] SAINDO por [network] (ou rota padrão se null).
+     * Separa "rota/porta inacessível" de "SDK não faz handshake". Bloqueante (use fora da main).
+     */
+    fun probeTcp(ip: String, port: Int, network: Network?, timeoutMs: Int = 1500): String {
+        return try {
+            val s = network?.socketFactory?.createSocket() ?: java.net.Socket()
+            s.use {
+                it.connect(java.net.InetSocketAddress(ip, port), timeoutMs)
+                "OK (porta aberta)"
+            }
+        } catch (e: java.net.SocketTimeoutException) {
+            "TIMEOUT (sem resposta)"
+        } catch (e: java.net.ConnectException) {
+            "RECUSADO (${e.message})"
+        } catch (e: Exception) {
+            "${e.javaClass.simpleName}: ${e.message}"
+        }
     }
 
     /** Amarra o processo a [net] (para o RobotSDK alcançar o chassi). API 23+. */
