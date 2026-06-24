@@ -28,7 +28,7 @@ class NetworkRouter(context: Context) {
     private val cm = context.getSystemService(ConnectivityManager::class.java)
 
     /** Rede com internet (validada de preferência). Capture ANTES de [bindProcess]. */
-    fun findInternetNetwork(preferCellular: Boolean): Network? {
+    fun findInternetNetwork(preferCellular: Boolean, avoid: Network? = null): Network? {
         val cm = cm ?: return null
         val withInternet = cm.allNetworks.filter { n ->
             cm.getNetworkCapabilities(n)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
@@ -38,9 +38,17 @@ class NetworkRouter(context: Context) {
             val c = cm.getNetworkCapabilities(n)
             var s = 0
             if (c?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true) s += 4
+            if (avoid != null && n != avoid) s += 1   // prefere uma rede DIFERENTE da do chassi
             if (preferCellular && c?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true) s += 2
             s
         }
+    }
+
+    /** A rede [net] tem internet validada? (INET + VALIDATED). */
+    fun hasInternet(net: Network): Boolean {
+        val c = cm?.getNetworkCapabilities(net) ?: return false
+        return c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            c.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
     /** Rede cujo endereço cai na MESMA /24 do [chassisIp] (ex.: 192.168.99.x). null = nenhuma. */

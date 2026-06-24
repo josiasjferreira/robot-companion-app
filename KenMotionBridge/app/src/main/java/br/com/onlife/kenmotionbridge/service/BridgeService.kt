@@ -142,23 +142,32 @@ class BridgeService : Service() {
     }
 
     /**
-     * Seleciona, por DADOS, a rede do chassi (pela sub-rede) e a de internet (pela capacidade),
-     * amarra o processo à do chassi quando fizer sentido, e publica o inventário das redes na tela.
-     * Retorna (redeDeInternet, precisaAmarrarMqtt) para o MQTT.
+     * Seleciona, por DADOS, a rede do chassi (pela sub-rede) e amarra o PROCESSO a ela, para o
+     * RobotSDK (que abre o próprio socket) alcançar o chassi. Decide a rota do MQTT:
+     *  - se a rede do chassi também tem internet validada, o MQTT usa o default (já é o chassi);
+     *  - senão, amarra o MQTT a outra rede com internet.
+     * Publica o inventário das redes na tela. Retorna (redeParaMqtt, precisaAmarrarMqtt).
      */
     private fun applyDualHoming(): Pair<Network?, Boolean>? {
-        // Internet é capturada ANTES do bind (depois, getActiveNetwork passa a ser a rede amarrada).
-        val internet = networkRouter.findInternetNetwork(config.mqttForceCellular)
         val chassi = networkRouter.findChassisNetwork(config.chassisIp)
         var bound = false
-        if (config.dualHoming && chassi != null && chassi != internet) {
+        if (config.dualHoming && chassi != null) {
             bound = networkRouter.bindProcess(chassi)
         }
+        // Com o processo amarrado ao chassi: se o chassi tem internet, o MQTT vai pelo default.
+        // Senão, escolhemos outra rede com internet (capturada agora) e amarramos o socket a ela.
+        val chassiHasNet = chassi != null && networkRouter.hasInternet(chassi)
+        val mqttNet: Network? = when {
+            !bound -> null                       // sem bind: default do sistema já tem internet
+            chassiHasNet -> null                 // chassi tem internet: MQTT usa o default (= chassi)
+            else -> networkRouter.findInternetNetwork(config.mqttForceCellular, avoid = chassi)
+        }
         val diag = networkRouter.describe(config.chassisIp) +
-            "\n→ chassi=${chassi ?: "NÃO ACHADA"} internet=${internet ?: "—"} bind=${if (bound) "SIM" else "não"}"
+            "\n→ chassi=${chassi ?: "NÃO ACHADA"} inet_chassi=$chassiHasNet bind=${if (bound) "SIM" else "não"} " +
+            "mqtt=${mqttNet?.toString() ?: "default"}"
         Log.i(TAG, "Redes:\n$diag")
         StatusBus.update { it.copy(netInfo = diag) }
-        return internet to (bound && internet != null)
+        return mqttNet to (mqttNet != null)
     }
 
     /** Recarrega config (settings) e reconecta tudo — usado pelo botão "Reiniciar ponte". */
