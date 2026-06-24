@@ -100,16 +100,19 @@ data class BridgeConfig(
             // Override da TELA de configurações (SharedPreferences) — prioridade máxima.
             val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val spHost = sp.getString(KEY_HOST, null)?.trim().orEmpty()
+            // Host de placeholder (ex.: SEU-CLUSTER…) gravado por engano é IGNORADO → cai no asset.
+            val spHostValid = spHost.isNotEmpty() && !spHost.contains("SEU-CLUSTER", ignoreCase = true)
             val uriFromAsset = mqtt.optString("uri", "ssl://localhost:8883")
-            val mqttUri = if (spHost.isNotEmpty()) {
+            val mqttUri = if (spHostValid) {
                 val port = sp.getInt(KEY_PORT, 8883)
                 "ssl://$spHost:$port"
             } else uriFromAsset
-            // TRIM remove espaços/quebras acidentais coladas no campo (causa comum de "auth falhou").
-            val mqttUser = (sp.getString(KEY_USER, null)?.takeIf { spHost.isNotEmpty() }
-                ?: mqtt.optString("username", "")).trim()
-            val mqttPassword = (sp.getString(KEY_PASS, null)?.takeIf { spHost.isNotEmpty() }
-                ?: mqtt.optString("password", "")).trim()
+            // Usuário/senha das prefs (se preenchidos) — INDEPENDENTES do host, para não perder a
+            // senha real quando o host salvo for um placeholder. TRIM remove espaços/quebras coladas.
+            val spUser = sp.getString(KEY_USER, null)?.trim().orEmpty()
+            val spPass = sp.getString(KEY_PASS, null)?.trim().orEmpty()
+            val mqttUser = (if (spUser.isNotEmpty()) spUser else mqtt.optString("username", "")).trim()
+            val mqttPassword = (if (spPass.isNotEmpty()) spPass else mqtt.optString("password", "")).trim()
 
             return BridgeConfig(
                 mqttUri = mqttUri,
