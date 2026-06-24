@@ -154,19 +154,28 @@ class BridgeService : Service() {
         if (config.dualHoming && chassi != null) {
             bound = networkRouter.bindProcess(chassi)
         }
-        // MQTT vai por uma internet DIFERENTE da do chassi (ex.: hotspot do celular). Se não houver,
-        // usa o default — não confiamos no "INET val=OK" da rede do chassi (costuma ser falso/cache).
+        // MQTT volta ao caminho PADRÃO (o ReResolvingSocket regrediu): com o processo amarrado ao
+        // chassi, o socket do MQTT (Java/Paho) honra o bind e sai pela mesma rede. Se ela tiver
+        // internet (val=OK), o broker conecta. As sondas abaixo confirmam isso por dados.
         val internet = networkRouter.findInternetNetwork(config.mqttForceCellular, avoid = chassi)
-        val mqttNet: Network? = if (bound && internet != null && internet != chassi) internet else null
-        // Sonda L4: o problema é rota/porta (TIMEOUT/RECUSADO) ou handshake do SDK (OK porta aberta)?
-        val probe = networkRouter.probeTcp(config.chassisIp, config.chassisPort, if (bound) chassi else null)
+        val brokerHost = BridgeConfig.hostFromUri(config.mqttUri)
+        val brokerPort = BridgeConfig.portFromUri(config.mqttUri)
+
+        // Sondas L4 (dados crus): isolam rota do chassi e internet por rede.
+        val pChassiEth = networkRouter.probeTcp(config.chassisIp, config.chassisPort, chassi)
+        val pChassiDef = networkRouter.probeTcp(config.chassisIp, config.chassisPort, null)
+        val pInetDef = networkRouter.probeTcp(brokerHost, brokerPort, null)
+        val pInetWlan = if (internet != null && internet != chassi)
+            networkRouter.probeTcp(brokerHost, brokerPort, internet) else "—"
+
         val diag = networkRouter.describe(config.chassisIp) +
-            "\n→ chassi=${chassi ?: "NÃO ACHADA"} bind=${if (bound) "SIM" else "não"} " +
-            "mqtt=${mqttNet?.toString() ?: "default"}" +
-            "\n→ TCP ${config.chassisIp}:${config.chassisPort} = $probe"
+            "\n→ chassi=${chassi ?: "NÃO ACHADA"} bind=${if (bound) "SIM" else "não"} mqtt=default" +
+            "\n→ chassi 1445: eth=$pChassiEth  default=$pChassiDef" +
+            "\n→ broker $brokerPort: default=$pInetDef  wlan=$pInetWlan"
         Log.i(TAG, "Redes:\n$diag")
         StatusBus.update { it.copy(netInfo = diag) }
-        return mqttNet to (mqttNet != null)
+        // MQTT no default (sem amarração explícita) enquanto investigamos.
+        return null to false
     }
 
     /** Recarrega config (settings) e reconecta tudo — usado pelo botão "Reiniciar ponte". */

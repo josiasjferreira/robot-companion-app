@@ -61,22 +61,27 @@ class NetworkRouter(context: Context) {
     }
 
     /**
-     * Sonda L4: tenta um TCP connect a [ip]:[port] SAINDO por [network] (ou rota padrão se null).
-     * Separa "rota/porta inacessível" de "SDK não faz handshake". Bloqueante (use fora da main).
+     * Sonda L4: resolve [host] (DNS escopado em [network], se houver) e tenta um TCP connect a
+     * [host]:[port] SAINDO por [network] (ou rota padrão se null). Separa rota/porta/DNS/internet.
+     * Bloqueante (use fora da main).
      */
-    fun probeTcp(ip: String, port: Int, network: Network?, timeoutMs: Int = 1500): String {
+    fun probeTcp(host: String, port: Int, network: Network?, timeoutMs: Int = 1200): String {
         return try {
+            val addr = (if (network != null) network.getAllByName(host) else java.net.InetAddress.getAllByName(host))
+                .firstOrNull() ?: return "DNS falhou"
             val s = network?.socketFactory?.createSocket() ?: java.net.Socket()
             s.use {
-                it.connect(java.net.InetSocketAddress(ip, port), timeoutMs)
-                "OK (porta aberta)"
+                it.connect(java.net.InetSocketAddress(addr, port), timeoutMs)
+                "OK"
             }
         } catch (e: java.net.SocketTimeoutException) {
-            "TIMEOUT (sem resposta)"
+            "TIMEOUT"
         } catch (e: java.net.ConnectException) {
-            "RECUSADO (${e.message})"
+            "RECUSADO(${e.message})"
+        } catch (e: java.net.UnknownHostException) {
+            "DNS falhou"
         } catch (e: Exception) {
-            "${e.javaClass.simpleName}: ${e.message}"
+            "${e.javaClass.simpleName}"
         }
     }
 
