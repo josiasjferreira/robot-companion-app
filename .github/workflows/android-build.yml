@@ -1,20 +1,24 @@
 name: Build APK
 
-# Gera o APK de debug do KenMotionBridge a cada push/PR e publica como artifact.
+# Gera o APK de debug do KenMotionBridge e publica como artifact.
 #
-# IMPORTANTE: o GitHub só executa workflows em `.github/workflows/` na RAIZ do repo.
-#  - Se o KenMotionBridge for a raiz do repositório, este arquivo já está no lugar.
-#  - Se ele for uma SUBPASTA (ex.: repo/KenMotionBridge), mova este arquivo para
-#    `<raiz>/.github/workflows/` e ajuste `PROJECT_DIR` abaixo para `KenMotionBridge`.
+# O projeto Android fica na subpasta KenMotionBridge/ deste repositório (a raiz
+# é o app web Lovable/Capacitor). Só roda quando a ponte muda, para não buildar
+# Android a cada alteração no app web.
 
 on:
   push:
-    branches: ["**"]
+    paths:
+      - "KenMotionBridge/**"
+      - ".github/workflows/android-build.yml"
   pull_request:
+    paths:
+      - "KenMotionBridge/**"
+      - ".github/workflows/android-build.yml"
   workflow_dispatch:
 
 env:
-  PROJECT_DIR: .   # troque para "KenMotionBridge" se o projeto estiver numa subpasta
+  PROJECT_DIR: KenMotionBridge
 
 jobs:
   build:
