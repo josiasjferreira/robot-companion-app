@@ -5,6 +5,10 @@ import { componentTagger } from "lovable-tagger";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
+  // mqtt.js (usado pelo transporte MQTT da UI) referencia `global` no browser.
+  define: {
+    global: "globalThis",
+  },
   server: {
     host: "::",
     port: 8080,
