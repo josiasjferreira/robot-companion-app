@@ -1,12 +1,27 @@
+import mqtt, { MqttClient } from 'mqtt';
 import { ConnectionStatus, ConnectionConfig, RobotCommand, RobotResponse, LogEntry } from '@/types/Robot';
+import { mqttConfig } from '@/services/mqttConfig';
 
 type LogCallback = (entry: LogEntry) => void;
 type StatusCallback = (status: ConnectionStatus) => void;
 
+/**
+ * Transporte UI <-> robô via MQTT (sobre WebSocket).
+ *
+ * Fala os MESMOS tópicos/payloads que o KenMotionBridge já implementa:
+ *   - publica comandos em  ken/motion/cmd     ({"type":"joystick"|"stop", ...})
+ *   - assina feedback em    ken/motion/feedback
+ *   - assina telemetria em  ken/sensors/telemetry
+ *
+ * A API pública (connect/sendCommand/disconnect/...) é mantida igual à versão
+ * HTTP/WebSocket anterior, então NENHUM componente da UI precisa mudar — a
+ * tradução de {cmd:'move', linear, angular} para o payload do bridge acontece
+ * aqui dentro, em [toBridgePayload].
+ */
 class RobotConnectionService {
   private config: ConnectionConfig = { ip: '192.168.99.2', port: '8080' };
   private status: ConnectionStatus = 'disconnected';
-  private ws: WebSocket | null = null;
+  private client: MqttClient | null = null;
   private onLog: LogCallback | null = null;
   private onStatus: StatusCallback | null = null;
   private latency: number | null = null;
@@ -35,117 +50,127 @@ class RobotConnectionService {
     this.onStatus?.(status);
   }
 
-  private getBaseUrl() {
-    return `http://${this.config.ip}:${this.config.port}`;
-  }
-
   async connect(): Promise<boolean> {
     this.lastAttempt = new Date();
     this.setStatus('connecting');
-    this.log('info', `Tentando conectar a ${this.config.ip}:${this.config.port}...`);
+    this.log('info', `Conectando ao broker MQTT ${mqttConfig.url}...`);
 
-    // Try HTTP first
-    try {
+    // Já conectado? Reaproveita.
+    if (this.client?.connected) {
+      this.setStatus('connected');
+      return true;
+    }
+
+    return new Promise<boolean>((resolve) => {
       const start = Date.now();
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-
-      const response = await fetch(`${this.getBaseUrl()}/api/status`, {
-        method: 'GET',
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-
-      this.latency = Date.now() - start;
-
-      if (response.ok) {
-        this.setStatus('connected');
-        this.log('success', `Conectado via HTTP (${this.latency}ms)`);
-        return true;
-      }
-    } catch {
-      this.log('info', 'HTTP falhou, tentando WebSocket...');
-    }
-
-    // Try WebSocket
-    try {
-      return await this.connectWebSocket();
-    } catch {
-      this.log('error', 'WebSocket falhou');
-    }
-
-    this.setStatus('error');
-    this.log('error', 'Todas as tentativas falharam');
-    return false;
-  }
-
-  private connectWebSocket(): Promise<boolean> {
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('WebSocket timeout'));
-      }, 5000);
+      let settled = false;
 
       try {
-        this.ws = new WebSocket(`ws://${this.config.ip}:${this.config.port}`);
-
-        this.ws.onopen = () => {
-          clearTimeout(timeout);
-          this.setStatus('connected');
-          this.log('success', 'Conectado via WebSocket');
-          resolve(true);
-        };
-
-        this.ws.onerror = () => {
-          clearTimeout(timeout);
-          reject(new Error('WebSocket error'));
-        };
-
-        this.ws.onclose = () => {
-          if (this.status === 'connected') {
-            this.setStatus('disconnected');
-            this.log('info', 'WebSocket desconectado');
-          }
-        };
-
-        this.ws.onmessage = (event) => {
-          this.log('received', `Resposta: ${event.data}`);
-        };
-      } catch {
-        clearTimeout(timeout);
-        reject(new Error('WebSocket init failed'));
+        this.client = mqtt.connect(mqttConfig.url, {
+          username: mqttConfig.username,
+          password: mqttConfig.password,
+          clientId: mqttConfig.clientId,
+          clean: true,
+          keepalive: 30,
+          reconnectPeriod: 3000,
+          connectTimeout: 8000,
+        });
+      } catch (err) {
+        this.setStatus('error');
+        this.log('error', `Falha ao iniciar MQTT: ${err}`);
+        resolve(false);
+        return;
       }
+
+      this.client.on('connect', () => {
+        this.latency = Date.now() - start;
+        this.setStatus('connected');
+        this.log('success', `Conectado via MQTT (${this.latency}ms)`);
+
+        // Assina os tópicos de retorno do bridge.
+        this.client?.subscribe([mqttConfig.topics.feedback, mqttConfig.topics.telemetry], (err) => {
+          if (err) this.log('error', `Falha ao assinar tópicos: ${err.message}`);
+        });
+
+        if (!settled) { settled = true; resolve(true); }
+      });
+
+      this.client.on('message', (topic, payload) => {
+        const text = payload.toString();
+        if (topic === mqttConfig.topics.telemetry) {
+          this.log('received', `Telemetria: ${text}`);
+        } else {
+          this.log('received', `Feedback: ${text}`);
+        }
+      });
+
+      this.client.on('error', (err) => {
+        this.log('error', `Erro MQTT: ${err.message}`);
+        if (!settled) { settled = true; this.setStatus('error'); resolve(false); }
+      });
+
+      this.client.on('close', () => {
+        if (this.status === 'connected') {
+          this.setStatus('disconnected');
+          this.log('info', 'MQTT desconectado');
+        }
+      });
+
+      this.client.on('reconnect', () => this.log('info', 'Reconectando MQTT...'));
     });
+  }
+
+  /**
+   * Converte o RobotCommand da UI no payload que o MotionController do bridge
+   * entende. No bridge: x -> angular, y -> linear, speed em 0..100.
+   * Os valores linear/angular da UI já vêm normalizados (-1..1, com o
+   * multiplicador de velocidade aplicado), então enviamos speed=100 para não
+   * escalar duas vezes — os tetos rígidos do bridge continuam valendo.
+   */
+  private toBridgePayload(command: RobotCommand): Record<string, unknown> {
+    switch (command.cmd) {
+      case 'move':
+        return {
+          type: 'joystick',
+          x: command.angular ?? 0,
+          y: command.linear ?? 0,
+          speed: 100,
+          boost: false,
+        };
+      case 'stop':
+        return { type: 'stop', emergency: command.emergency ?? false };
+      default:
+        // dock, save_map, etc. — repassados para tratamento futuro no bridge.
+        return { type: command.cmd, ...command };
+    }
   }
 
   async sendCommand(command: RobotCommand): Promise<RobotResponse | null> {
     const cmd = { ...command, timestamp: Date.now() };
-    this.log('sent', `Comando: ${JSON.stringify(cmd)}`);
 
-    // Try WebSocket first if connected
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(cmd));
-      return { status: 'ok' };
+    if (!this.client?.connected) {
+      this.log('error', 'Comando ignorado: MQTT não conectado');
+      return { status: 'error', message: 'desconectado' };
     }
 
-    // Fallback to HTTP
-    try {
-      const response = await fetch(`${this.getBaseUrl()}/api/command`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(cmd),
+    const payload = JSON.stringify(this.toBridgePayload(cmd));
+    this.log('sent', `Comando: ${payload}`);
+
+    return new Promise<RobotResponse | null>((resolve) => {
+      this.client?.publish(mqttConfig.topics.cmd, payload, { qos: 0 }, (err) => {
+        if (err) {
+          this.log('error', `Erro ao publicar: ${err.message}`);
+          resolve({ status: 'error', message: err.message });
+        } else {
+          resolve({ status: 'ok' });
+        }
       });
-      const data = await response.json();
-      this.log('received', `Resposta: ${JSON.stringify(data)}`);
-      return data;
-    } catch (error) {
-      this.log('error', `Erro ao enviar: ${error}`);
-      return null;
-    }
+    });
   }
 
   disconnect() {
-    this.ws?.close();
-    this.ws = null;
+    this.client?.end(true);
+    this.client = null;
     this.setStatus('disconnected');
     this.log('info', 'Desconectado');
   }

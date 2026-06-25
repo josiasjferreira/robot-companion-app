@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:background="#0B1220">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textColor="#E6EDF3"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="20dp"
+            android:text="Ponte MQTT ⇄ RobotSDK (chassi Slamware)"
+            android:textColor="#8B98A5"
+            android:textSize="13sp" />
+
+        <TextView android:id="@+id/txtBroker" style="@style/StatusLine" android:text="Broker MQTT: —" />
+        <TextView android:id="@+id/txtSdk" style="@style/StatusLine" android:text="SDK / Chassi: —" />
+        <TextView android:id="@+id/txtService" style="@style/StatusLine" android:text="Serviço: —" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="12dp"
+            android:background="#22303C" />
+
+        <TextView android:id="@+id/txtLastCmd" style="@style/StatusLine" android:text="Último comando: —" />
+        <TextView android:id="@+id/txtVelocity" style="@style/StatusLine" android:text="v = 0.00 m/s    w = 0.00 rad/s" />
+        <TextView android:id="@+id/txtFront" style="@style/StatusLine" android:text="Dist. frontal: —" />
+        <TextView android:id="@+id/txtBattery" style="@style/StatusLine" android:text="Bateria: —" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnStart"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:layout_weight="1"
+                android:text="Iniciar ponte" />
+
+            <Button
+                android:id="@+id/btnStop"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:text="Parar ponte" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>
