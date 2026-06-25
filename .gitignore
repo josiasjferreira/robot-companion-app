@@ -17,6 +17,11 @@ dist-ssr
 .env.*
 !.env.example
 
+# SDK proprietário do fabricante (não versionar binário/licenciado).
+# O build compila sem ele via reflexão; coloque o AAR localmente para o robô andar.
+KenMotionBridge/app/libs/*.aar
+KenMotionBridge/app/libs/*.jar
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
