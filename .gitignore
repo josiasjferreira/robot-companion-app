@@ -22,6 +22,10 @@ dist-ssr
 KenMotionBridge/app/libs/*.aar
 KenMotionBridge/app/libs/*.jar
 
+# Projeto Android gerado pelo Capacitor (recriado por scripts/build-all.*).
+# Se você customizar código nativo da UI, remova esta linha e versione a pasta.
+/android/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
