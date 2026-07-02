@@ -1,0 +1,311 @@
+package br.com.onlife.kenmotionbridge.service
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.os.IBinder
+import android.os.PowerManager
+import android.os.RemoteException
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import br.com.onlife.kenmotionbridge.BridgeConfig
+import br.com.onlife.kenmotionbridge.MainActivity
+import br.com.onlife.kenmotionbridge.R
+import br.com.onlife.kenmotionbridge.StatusBus
+import br.com.onlife.kenmotionbridge.ipc.IFeedbackSink
+import br.com.onlife.kenmotionbridge.ipc.IRobotControl
+import br.com.onlife.kenmotionbridge.motion.MotionController
+import br.com.onlife.kenmotionbridge.net.NetworkRouter
+import br.com.onlife.kenmotionbridge.sdk.KenMotionSdk
+import br.com.onlife.kenmotionbridge.sdk.SlamwareChassis
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import org.json.JSONObject
+
+/**
+ * Processo PRINCIPAL da ponte (Solução 1 — dual-homing por processo).
+ *
+ * Responsável APENAS pelo chassi: amarra ESTE processo à rede do chassi (`192.168.99.x`, sem
+ * internet) via [NetworkRouter.bindProcess], conecta o RobotSDK, roda o loop de controle (~20 Hz)
+ * e produz feedback/telemetria a 1 Hz. NÃO fala MQTT — isso vive no processo `:mqtt`
+ * ([MqttBridgeService]), que tem o próprio bind de rede (internet) e conversa com este serviço por
+ * IPC ([IRobotControl]/[IFeedbackSink]).
+ */
+class RobotBridgeService : Service() {
+
+    companion object {
+        private const val TAG = "RobotBridgeService"
+        private const val CHANNEL_ID = "ken_motion_bridge"
+        private const val NOTIF_ID = 1001
+        const val ACTION_STOP = "br.com.onlife.kenmotionbridge.STOP"
+        const val ACTION_RESTART = "br.com.onlife.kenmotionbridge.RESTART"
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var loopJob: Job? = null
+    private var feedbackJob: Job? = null
+
+    private lateinit var config: BridgeConfig
+    private lateinit var chassis: SlamwareChassis
+    private lateinit var motionSdk: KenMotionSdk
+    private lateinit var motion: MotionController
+    private val networkRouter by lazy { NetworkRouter(this) }
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var freshlyCreated = false
+
+    /** Canal de volta para o processo :mqtt publicar feedback/telemetria. */
+    @Volatile private var feedbackSink: IFeedbackSink? = null
+
+    // ── Servidor IPC exposto ao processo :mqtt ────────────────────────────────
+    private val binder = object : IRobotControl.Stub() {
+        override fun onCommand(json: String?) {
+            json ?: return
+            runCatching { motion.onCommand(json) }
+                .onFailure { Log.w(TAG, "onCommand falhou: ${it.message}") }
+        }
+        override fun registerFeedback(sink: IFeedbackSink?) {
+            feedbackSink = sink
+            Log.i(TAG, "Processo :mqtt registrou canal de feedback")
+        }
+        override fun unregisterFeedback(sink: IFeedbackSink?) {
+            if (feedbackSink == sink) feedbackSink = null
+        }
+        override fun reportMqttStatus(connected: Boolean, error: String?) {
+            StatusBus.update {
+                it.copy(brokerConnected = connected, brokerError = if (connected) "" else (error ?: it.brokerError))
+            }
+        }
+        override fun isChassisOnline(): Boolean =
+            chassis.connected && chassis.dcConnected()
+    }
+
+    override fun onBind(intent: Intent?): IBinder = binder
+
+    override fun onCreate() {
+        super.onCreate()
+        config = BridgeConfig.load(this)
+        buildPipeline()
+        createChannel()
+        startForeground(NOTIF_ID, buildNotification("Iniciando…"))
+        acquireWakeLock()
+        connectAll()
+        startControlLoop()
+        startFeedbackLoop()
+        StatusBus.update { it.copy(serviceRunning = true) }
+        freshlyCreated = true
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
+            ACTION_RESTART -> if (!freshlyCreated) restartConnections()
+        }
+        freshlyCreated = false
+        return START_STICKY
+    }
+
+    private fun buildPipeline() {
+        // Usuário/senha-mascarada exibidos na UI (o broker em si é do processo :mqtt).
+        StatusBus.update {
+            it.copy(brokerUser = config.mqttUser, brokerPassLen = config.mqttPassword.length)
+        }
+        chassis = SlamwareChassis(this, config) { connected, error, bnd, classTried ->
+            StatusBus.update {
+                it.copy(sdkConnected = connected, sdkError = error, sdkBound = bnd, sdkClassTried = classTried)
+            }
+        }
+        motionSdk = KenMotionSdk(chassis)
+        motion = MotionController(chassis, config, motionSdk)
+    }
+
+    private fun connectAll() {
+        scope.launch {
+            applyChassisRouting()
+            chassis.connect()
+            motionSdk.inicializarConexaoRobo()
+        }
+    }
+
+    /** Amarra ESTE processo à rede do chassi mais alcançável agora e publica o diagnóstico. */
+    private fun applyChassisRouting() {
+        if (!config.dualHoming) return
+        val chassi = networkRouter.findChassisNetwork(config.chassisIp, config.chassisPort)
+        val bound = chassi != null && networkRouter.bindProcess(chassi)
+        val probe = networkRouter.probeTcp(config.chassisIp, config.chassisPort, if (bound) chassi else null)
+        val diag = networkRouter.describe(config.chassisIp) +
+            "\n→ chassi=${chassi ?: "NÃO ACHADA"} bind=${if (bound) "SIM" else "não"}" +
+            "\n→ TCP ${config.chassisIp}:${config.chassisPort} = $probe" +
+            "\n→ MQTT: processo :mqtt (rede própria)"
+        Log.i(TAG, "Redes:\n$diag")
+        StatusBus.update { it.copy(netInfo = diag) }
+    }
+
+    private fun rebindChassisQuiet() {
+        if (!config.dualHoming) return
+        networkRouter.findChassisNetwork(config.chassisIp, config.chassisPort)
+            ?.let { networkRouter.bindProcess(it) }
+    }
+
+    private fun restartConnections() {
+        scope.launch {
+            runCatching { chassis.disconnect() }
+            config = BridgeConfig.load(this@RobotBridgeService)
+            buildPipeline()
+            applyChassisRouting()
+            chassis.connect()
+            motionSdk.inicializarConexaoRobo()
+        }
+    }
+
+    private fun startControlLoop() {
+        val periodMs = (1000L / config.controlHz).coerceAtLeast(10L)
+        loopJob = scope.launch {
+            var last = System.nanoTime()
+            while (isActive) {
+                val now = System.nanoTime()
+                val dt = (now - last) / 1_000_000_000.0
+                last = now
+                try {
+                    motion.tick(dt)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Erro no tick: ${t.message}")
+                }
+                StatusBus.update {
+                    it.copy(
+                        linear = motion.currentV, angular = motion.currentW,
+                        frontCm = motion.frontCm, lastCommand = motion.lastCommandLabel,
+                    )
+                }
+                delay(periodMs)
+            }
+        }
+    }
+
+    private fun startFeedbackLoop() {
+        feedbackJob = scope.launch {
+            while (isActive) {
+                try { publicarTelemetria() } catch (t: Throwable) {
+                    Log.e(TAG, "Erro no loop de telemetria (continuando): ${t.message}", t)
+                }
+                delay(1000L)
+            }
+        }
+    }
+
+    private fun publicarTelemetria() {
+        val now = System.currentTimeMillis()
+
+        if (chassis.connected && !chassis.dcConnected()) {
+            Log.w(TAG, "Canal Slamware caiu (getDCIsConnected=false) — reconectando…")
+            StatusBus.update { it.copy(sdkConnected = false, sdkError = "reconectando ao chassi…") }
+            rebindChassisQuiet()
+            chassis.connect()
+        }
+
+        val tel = chassis.readTelemetry()
+        val online = chassis.connected && tel.dcConnected
+
+        StatusBus.update {
+            it.copy(
+                sdkConnected = online,
+                batteryPct = tel.battery, charging = tel.charging,
+                poseX = tel.poseX, poseY = tel.poseY, poseYawDeg = tel.poseYawDeg,
+                localization = tel.localization,
+                frontCm = if (tel.frontCm.isNaN()) motion.frontCm else tel.frontCm,
+                telemetryAt = if (online) now else it.telemetryAt,
+            )
+        }
+
+        // Feedback (ken/motion/feedback) — enviado ao :mqtt por IPC; ele publica e mantém o heartbeat.
+        val fb = JSONObject().apply {
+            put("online", online)
+            put("v", round3(motion.currentV))
+            put("w", round3(motion.currentW))
+            put("front_cm", if (tel.frontCm.isNaN()) JSONObject.NULL else round1(tel.frontCm))
+            put("ts", now)
+        }
+        sendFeedback(fb.toString())
+
+        if (online) {
+            val tj = chassis.telemetryJson().apply { put("ts", now) }
+            sendTelemetry(tj.toString())
+        }
+        updateNotification()
+    }
+
+    private fun sendFeedback(json: String) {
+        val sink = feedbackSink ?: return
+        try { sink.onFeedback(json) } catch (e: RemoteException) {
+            Log.w(TAG, "Canal :mqtt caiu (feedback): ${e.message}"); feedbackSink = null
+        }
+    }
+
+    private fun sendTelemetry(json: String) {
+        val sink = feedbackSink ?: return
+        try { sink.onTelemetry(json) } catch (e: RemoteException) {
+            Log.w(TAG, "Canal :mqtt caiu (telemetria): ${e.message}"); feedbackSink = null
+        }
+    }
+
+    private fun updateNotification() {
+        val s = StatusBus.state.value
+        val txt = "Broker:${if (s.brokerConnected) "OK" else "—"}  SDK:${if (s.sdkConnected) "OK" else "—"}  " +
+            "v=%.2f w=%.2f".format(s.linear, s.angular)
+        getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(txt))
+    }
+
+    private fun acquireWakeLock() {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "KenMotionBridge::robot").apply {
+            setReferenceCounted(false); acquire()
+        }
+    }
+
+    private fun createChannel() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val ch = NotificationChannel(CHANNEL_ID, "KEN Motion Bridge", NotificationManager.IMPORTANCE_LOW)
+                .apply { description = "Ponte de movimento do robô KEN" }
+            getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
+        }
+    }
+
+    private fun buildNotification(text: String): Notification {
+        val openIntent = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("KEN Motion Bridge")
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setOngoing(true)
+            .setContentIntent(openIntent)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+    }
+
+    override fun onDestroy() {
+        StatusBus.update { it.copy(serviceRunning = false, sdkConnected = false) }
+        loopJob?.cancel(); feedbackJob?.cancel()
+        runCatching { motion.stop() }
+        runCatching { motionSdk.liberar() }
+        runCatching { chassis.disconnect() }
+        runCatching { networkRouter.release() }
+        runCatching { wakeLock?.release() }
+        scope.cancel()
+        super.onDestroy()
+    }
+
+    private fun round3(v: Double) = Math.round(v * 1000.0) / 1000.0
+    private fun round1(v: Double) = Math.round(v * 10.0) / 10.0
+}

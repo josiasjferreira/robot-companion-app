@@ -19,6 +19,15 @@ data class BridgeConfig(
     val cleanSession: Boolean,
     val keepAliveSec: Int,
     val tlsInsecure: Boolean,
+    /** Amarra o socket do MQTT à rede celular (4G/USB) — split de rotas com o Wi-Fi do robô. */
+    val mqttForceCellular: Boolean,
+    /**
+     * Dual-homing do tablet do robô: o CHASSI fica numa LAN Ethernet sem internet
+     * (ex.: 192.168.99.x) e a INTERNET vem por outra rede (Wi-Fi/4G/USB). Quando ligado:
+     *  - o PROCESSO é amarrado à Ethernet (para o RobotSDK alcançar o chassi);
+     *  - o socket do MQTT é amarrado à rede de internet (com DNS escopado nela).
+     */
+    val dualHoming: Boolean,
     // Tópicos
     val topicCmd: String,
     val topicFeedback: String,
@@ -44,6 +53,37 @@ data class BridgeConfig(
         private const val ASSET = "bridge_config.json"
         private val OVERRIDE = File("/sdcard/kenmotion/config.json")
 
+        // SharedPreferences usado pela tela de Configurações.
+        const val PREFS = "ken_bridge_settings"
+        const val KEY_HOST = "mqtt_host"
+        const val KEY_PORT = "mqtt_port"
+        const val KEY_USER = "mqtt_user"
+        const val KEY_PASS = "mqtt_pass"
+        const val KEY_FORCE_CELL = "mqtt_force_cellular"
+
+        /** Host (sem esquema/porta) extraído de uma URI ssl://host:porta ou wss://host:porta/path. */
+        fun hostFromUri(uri: String): String =
+            uri.substringAfter("://").substringBefore(":").substringBefore("/")
+
+        /** Porta extraída da URI; default 8883 (MQTT/TLS nativo). */
+        fun portFromUri(uri: String): Int =
+            uri.substringAfter("://").substringAfter(":", "").substringBefore("/")
+                .toIntOrNull() ?: 8883
+
+        /** Persiste os valores da tela de Configurações. */
+        fun saveSettings(
+            context: Context, host: String, port: Int, user: String, pass: String,
+            forceCellular: Boolean,
+        ) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString(KEY_HOST, host.trim())
+                .putInt(KEY_PORT, port)
+                .putString(KEY_USER, user.trim())
+                .putString(KEY_PASS, pass.trim())
+                .putBoolean(KEY_FORCE_CELL, forceCellular)
+                .apply()
+        }
+
         fun load(context: Context): BridgeConfig {
             val base = readAsset(context)
             val merged = if (OVERRIDE.exists()) {
@@ -57,18 +97,37 @@ data class BridgeConfig(
             val chassis = merged.optJSONObject("chassis") ?: JSONObject()
             val motion = merged.optJSONObject("motion") ?: JSONObject()
 
+            // Override da TELA de configurações (SharedPreferences) — prioridade máxima.
+            val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val spHost = sp.getString(KEY_HOST, null)?.trim().orEmpty()
+            // Host de placeholder (ex.: SEU-CLUSTER…) gravado por engano é IGNORADO → cai no asset.
+            val spHostValid = spHost.isNotEmpty() && !spHost.contains("SEU-CLUSTER", ignoreCase = true)
+            val uriFromAsset = mqtt.optString("uri", "ssl://localhost:8883")
+            val mqttUri = if (spHostValid) {
+                val port = sp.getInt(KEY_PORT, 8883)
+                "ssl://$spHost:$port"
+            } else uriFromAsset
+            // Usuário/senha das prefs (se preenchidos) — INDEPENDENTES do host, para não perder a
+            // senha real quando o host salvo for um placeholder. TRIM remove espaços/quebras coladas.
+            val spUser = sp.getString(KEY_USER, null)?.trim().orEmpty()
+            val spPass = sp.getString(KEY_PASS, null)?.trim().orEmpty()
+            val mqttUser = (if (spUser.isNotEmpty()) spUser else mqtt.optString("username", "")).trim()
+            val mqttPassword = (if (spPass.isNotEmpty()) spPass else mqtt.optString("password", "")).trim()
+
             return BridgeConfig(
-                mqttUri = mqtt.optString("uri", "ssl://localhost:8883"),
-                mqttUser = mqtt.optString("username", ""),
-                mqttPassword = mqtt.optString("password", ""),
+                mqttUri = mqttUri,
+                mqttUser = mqttUser,
+                mqttPassword = mqttPassword,
                 clientId = mqtt.optString("clientId", "ken-motion-bridge"),
                 cleanSession = mqtt.optBoolean("cleanSession", true),
                 keepAliveSec = mqtt.optInt("keepAliveSec", 30),
                 tlsInsecure = mqtt.optBoolean("tlsInsecure", false),
+                mqttForceCellular = sp.getBoolean(KEY_FORCE_CELL, mqtt.optBoolean("forceCellular", false)),
+                dualHoming = mqtt.optBoolean("dualHoming", true),
                 topicCmd = topics.optString("cmd", "ken/motion/cmd"),
                 topicFeedback = topics.optString("feedback", "ken/motion/feedback"),
                 topicTelemetry = topics.optString("telemetry", "ken/sensors/telemetry"),
-                chassisIp = chassis.optString("ip", "192.168.11.1"),
+                chassisIp = chassis.optString("ip", "192.168.99.2"),
                 chassisPort = chassis.optInt("port", 1445),
                 useCsjbotBinding = chassis.optBoolean("useCsjbotBinding", true),
                 vMax = motion.optDouble("vMax", 0.4),

@@ -28,7 +28,41 @@
             android:textSize="13sp" />
 
         <TextView android:id="@+id/txtBroker" style="@style/StatusLine" android:text="Broker MQTT: —" />
+        <TextView
+            android:id="@+id/txtBrokerError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:textColor="#FF6B6B"
+            android:textSize="13sp"
+            android:visibility="gone" />
+        <TextView
+            android:id="@+id/txtBrokerAuth"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:textColor="#8B98A5"
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:text="Auth: —" />
         <TextView android:id="@+id/txtSdk" style="@style/StatusLine" android:text="SDK / Chassi: —" />
+        <TextView
+            android:id="@+id/txtSdkError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:textColor="#FF6B6B"
+            android:textSize="13sp"
+            android:visibility="gone" />
+        <TextView
+            android:id="@+id/txtSdkInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:textColor="#8B98A5"
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:text="Serviço bound: —" />
         <TextView android:id="@+id/txtService" style="@style/StatusLine" android:text="Serviço: —" />
 
         <View
@@ -41,6 +75,31 @@
         <TextView android:id="@+id/txtVelocity" style="@style/StatusLine" android:text="v = 0.00 m/s    w = 0.00 rad/s" />
         <TextView android:id="@+id/txtFront" style="@style/StatusLine" android:text="Dist. frontal: —" />
         <TextView android:id="@+id/txtBattery" style="@style/StatusLine" android:text="Bateria: —" />
+        <TextView android:id="@+id/txtPose" style="@style/StatusLine" android:text="Pose: —" />
+        <TextView android:id="@+id/txtTelemetry" style="@style/StatusLine" android:text="Telemetria: —" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="12dp"
+            android:background="#22303C" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Redes (diagnóstico)"
+            android:textColor="#8B98A5"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+        <TextView
+            android:id="@+id/txtNet"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="#9ECBFF"
+            android:textSize="11sp"
+            android:fontFamily="monospace"
+            android:text="—" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -49,12 +108,12 @@
             android:orientation="horizontal">
 
             <Button
-                android:id="@+id/btnStart"
+                android:id="@+id/btnRestart"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
                 android:layout_weight="1"
-                android:text="Iniciar ponte" />
+                android:text="Reiniciar ponte" />
 
             <Button
                 android:id="@+id/btnStop"
@@ -64,5 +123,12 @@
                 android:layout_weight="1"
                 android:text="Parar ponte" />
         </LinearLayout>
+
+        <Button
+            android:id="@+id/btnSettings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Configurações do broker" />
     </LinearLayout>
 </ScrollView>

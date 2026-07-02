@@ -39,6 +39,10 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: chmod +x gradlew
 
+      - name: Run unit tests
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: ./gradlew --no-daemon testDebugUnitTest
+
       - name: Build debug APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: ./gradlew --no-daemon assembleDebug

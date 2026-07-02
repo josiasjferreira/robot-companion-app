@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:background="#0B1220">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Configurações do broker"
+            android:textColor="#E6EDF3"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            android:text="Cliente NATIVO Paho → use o endpoint TLS ssl://HOST:8883 (o navegador/Lovable usa wss://…:8884). Use as MESMAS credenciais do HiveMQ Cloud."
+            android:textColor="#8B98A5"
+            android:textSize="13sp" />
+
+        <TextView style="@style/StatusLine" android:text="Host (sem ssl:// e sem porta)" />
+        <EditText
+            android:id="@+id/editHost"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="abc123.s1.eu.hivemq.cloud"
+            android:inputType="textUri"
+            android:textColor="#E6EDF3"
+            android:textColorHint="#5B6776" />
+
+        <TextView style="@style/StatusLine" android:text="Porta (TLS nativo = 8883)" />
+        <EditText
+            android:id="@+id/editPort"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="8883"
+            android:inputType="number"
+            android:textColor="#E6EDF3"
+            android:textColorHint="#5B6776" />
+
+        <TextView style="@style/StatusLine" android:text="Usuário" />
+        <EditText
+            android:id="@+id/editUser"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="ken-robot"
+            android:inputType="textNoSuggestions"
+            android:textAllCaps="false"
+            android:autofillHints="username"
+            android:textColor="#E6EDF3"
+            android:textColorHint="#5B6776" />
+
+        <TextView style="@style/StatusLine" android:text="Senha" />
+        <EditText
+            android:id="@+id/editPass"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="••••••••"
+            android:inputType="textPassword"
+            android:textColor="#E6EDF3"
+            android:textColorHint="#5B6776" />
+
+        <CheckBox
+            android:id="@+id/chkForceCellular"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:textColor="#E6EDF3"
+            android:text="Forçar MQTT pelo 4G/dado móvel (chassi fica no Wi-Fi do robô)" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:textColor="#8B98A5"
+            android:textSize="12sp"
+            android:text="Ligue isto quando o tablet estiver no Wi-Fi do robô (RoboKen_Controle) e usar 4G/USB para a internet. O socket do MQTT sai pelo celular; o chassi (192.168.99.x) continua pelo Wi-Fi." />
+
+        <Button
+            android:id="@+id/btnSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Salvar e reiniciar ponte" />
+
+        <Button
+            android:id="@+id/btnCancel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Cancelar" />
+    </LinearLayout>
+</ScrollView>

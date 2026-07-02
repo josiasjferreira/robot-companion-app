@@ -59,6 +59,14 @@ dependencies {
     // compila mesmo sem o AAR (a ponte usa reflexão em SlamwareChassis.kt).
     implementation fileTree(dir: 'libs', include: ['*.aar', '*.jar'])
 
+    // ── Dependências TRANSITIVAS do RobotSDK-client.jar (não vêm embutidas no jar) ──
+    // O SDK Slamware usa um WebSocket bridge + Gson + commons-io. Sem elas, a classe
+    // com.slamtec.slamware.sdp.SlamwareSdpPlatform / CsjSlamCore falham ao inicializar
+    // com NoClassDefFoundError (org.java_websocket.client.WebSocketClient ausente).
+    implementation 'org.java-websocket:Java-WebSocket:1.5.6'
+    implementation 'com.google.code.gson:gson:2.10.1'
+    implementation 'commons-io:commons-io:2.13.0'
+
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.24'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 
@@ -70,4 +78,7 @@ dependencies {
 
     // MQTT (Paho Java — suporta ssl:// e wss:// para o HiveMQ Cloud)
     implementation 'org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5'
+
+    // Testes unitários JVM (lógica pura — ex.: backoff de reconexão).
+    testImplementation 'junit:junit:4.13.2'
 }

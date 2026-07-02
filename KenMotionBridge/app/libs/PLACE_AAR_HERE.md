@@ -8,11 +8,10 @@ RobotSDK_release_i18n_2_4_0_43.aar
 
 (ou versão mais nova equivalente em `.aar`/`.jar`).
 
-## ✅ RESOLVIDO (2026-07-02): o SDK já está no repositório
+## ✅ RESOLVIDO (2026-07-02): o SDK já está NESTA pasta
 
-O branch `claude/confident-ritchie-0n0dkc` contém
-`KenMotionBridge/app/libs/RobotSDK-client.jar` (1,9 MB), extraído do APK do
-próprio robô. Verificado via `javap`:
+`RobotSDK-client.jar` (1,9 MB, extraído do APK do próprio robô) está versionado
+aqui ao lado — nenhum download é necessário. Verificado via `javap`:
 
 - `com.slamtec.slamware.SlamwareCorePlatform.connect(String, int)` — estático ✓
 - `moveBy(com.slamtec.slamware.action.MoveDirection)` — enum FORWARD/BACKWARD/

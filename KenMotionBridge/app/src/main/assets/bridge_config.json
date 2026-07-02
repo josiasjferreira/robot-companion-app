@@ -9,7 +9,10 @@
     "clientId": "ken-motion-bridge",
     "cleanSession": true,
     "keepAliveSec": 30,
-    "tlsInsecure": false
+    "tlsInsecure": false,
+    "forceCellular": false,
+    "_dualHoming": "Dual-homing: chassi na LAN Ethernet (sem internet) + internet por Wi-Fi/4G/USB. Ligado por padrão. Amarra o processo à Ethernet (p/ o chassi) e o MQTT à rede de internet. Desligue (false) só se o tablet usar UMA rede para tudo.",
+    "dualHoming": true
   },
 
   "topics": {
@@ -19,11 +22,10 @@
   },
 
   "chassis": {
-    "_comment": "Endereço do chassi Slamware (Slamware via TCP 1445). Normalmente 192.168.11.1.",
-    "ip": "192.168.11.1",
+    "_comment": "Chassi Slamware via TCP 1445. Costuma ficar na LAN Ethernet do robô (ex.: tablet 192.168.99.200 -> chassi 192.168.99.2). Com dualHoming ligado, o processo é amarrado à Ethernet para alcançá-lo.",
+    "ip": "192.168.99.2",
     "port": 1445,
-    "_comment_csjbot": "Desligado: o binding com.csjbot.sdkhandler só fecha com o .aidl OFICIAL do fabricante (descriptor precisa bater). O movimento é 100% via Slamware (TCP 1445), entao manter false e o caminho simples e estavel.",
-    "useCsjbotBinding": false
+    "useCsjbotBinding": true
   },
 
   "motion": {

@@ -9,9 +9,9 @@ import androidx.core.content.ContextCompat
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action == Intent.ACTION_BOOT_COMPLETED) {
-            ContextCompat.startForegroundService(
-                context, Intent(context, BridgeService::class.java)
-            )
+            // Sobe os dois processos da ponte (chassi + :mqtt) após o boot.
+            ContextCompat.startForegroundService(context, Intent(context, RobotBridgeService::class.java))
+            ContextCompat.startForegroundService(context, Intent(context, MqttBridgeService::class.java))
         }
     }
 }

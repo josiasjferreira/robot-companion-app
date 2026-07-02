@@ -2,6 +2,7 @@ package br.com.onlife.kenmotionbridge.motion
 
 import android.util.Log
 import br.com.onlife.kenmotionbridge.BridgeConfig
+import br.com.onlife.kenmotionbridge.sdk.KenMotionSdk
 import br.com.onlife.kenmotionbridge.sdk.SlamwareChassis
 import org.json.JSONObject
 import kotlin.math.abs
@@ -14,10 +15,17 @@ import kotlin.math.sign
  *  - segurança de obstáculo frontal (< safeFrontCm e v>0 -> v=0).
  *
  * O loop de controle (~controlHz) chama [tick]; o MQTT chama [onCommand].
+ *
+ * Caminhos de movimento:
+ *  - `joystick`/`stop`: velocidade em tempo real via [SlamwareChassis] (teleop contínuo).
+ *  - `chassis`: comandos de ALTO NÍVEL (frente/trás/girar/ângulo) centralizados no
+ *    [KenMotionSdk] (RobotSDK CSJBot). Mantém o joystick intacto.
  */
 class MotionController(
     private val chassis: SlamwareChassis,
     private val config: BridgeConfig,
+    /** Camada central de movimento do chassi (RobotSDK). Opcional p/ não quebrar testes. */
+    private val motionSdk: KenMotionSdk? = null,
 ) {
     companion object { private const val TAG = "MotionController" }
 
@@ -50,7 +58,35 @@ class MotionController(
                 lastCommandAt = System.currentTimeMillis()
             }
             "stop" -> stop()
+            "chassis" -> handleChassis(json)
             else -> Log.w(TAG, "Tipo de comando desconhecido: $raw")
+        }
+    }
+
+    /**
+     * Comandos de ALTO NÍVEL do chassi, centralizados no [KenMotionSdk].
+     * Formato: { "type":"chassis", "action":"frente|tras|esquerda|direita|parar",
+     *            "speed":<m/s opcional>, "angle":<graus opcional>, "durationMs":<opcional> }
+     */
+    private fun handleChassis(json: JSONObject) {
+        val sdk = motionSdk
+        if (sdk == null) {
+            Log.w(TAG, "Comando 'chassis' ignorado: KenMotionSdk não disponível")
+            return
+        }
+        val action = json.optString("action")
+        val speed = json.optDouble("speed", KenMotionSdk.VELOCIDADE_PADRAO.toDouble()).toFloat()
+        val angle = if (json.has("angle")) json.optInt("angle") else null
+        val durationMs = if (json.has("durationMs")) json.optLong("durationMs") else null
+        lastCommandLabel = "chassis $action${angle?.let { " ${it}°" } ?: ""}"
+        lastCommandAt = System.currentTimeMillis()
+        when (action) {
+            "frente" -> sdk.moverFrente(speed, durationMs)
+            "tras" -> sdk.moverTras(speed, durationMs)
+            "esquerda" -> sdk.virarEsquerda(angle, speed)
+            "direita" -> sdk.virarDireita(angle, speed)
+            "parar" -> { sdk.pararMovimento(); stop() }
+            else -> Log.w(TAG, "Ação de chassis desconhecida: $action")
         }
     }
 

@@ -30,6 +30,33 @@ export interface LogEntry {
   message: string;
 }
 
+/** Telemetria recebida da ponte em `ken/motion/feedback`. */
+export interface MotionFeedback {
+  online: boolean;
+  v: number;
+  w: number;
+  front_cm: number | null;
+  ts: number;
+}
+
+/** Telemetria recebida da ponte em `ken/sensors/telemetry`. */
+export interface SensorTelemetry {
+  battery?: number;
+  charging?: boolean;
+  pose?: { x: number; y: number; yaw_deg?: number };
+  imu?: { yaw?: number; pitch?: number; roll?: number };
+  localization?: number;
+  ts: number;
+  [k: string]: unknown;
+}
+
+/** Estado consolidado de telemetria (fonte única para a UI). */
+export interface TelemetryState {
+  feedback: MotionFeedback | null;
+  sensors: SensorTelemetry | null;
+  lastTs: number;
+}
+
 export interface VoiceCommand {
   phrase: string;
   command: RobotCommand;

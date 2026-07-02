@@ -11,7 +11,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import br.com.onlife.kenmotionbridge.databinding.ActivityMainBinding
-import br.com.onlife.kenmotionbridge.service.BridgeService
+import br.com.onlife.kenmotionbridge.service.MqttBridgeService
+import br.com.onlife.kenmotionbridge.service.RobotBridgeService
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -25,17 +26,22 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        binding.btnStart.setOnClickListener {
+        binding.btnRestart.setOnClickListener {
             ensureNotificationPermission()
-            ContextCompat.startForegroundService(this, Intent(this, BridgeService::class.java))
+            // (Re)inicia AMBOS os processos (chassi + :mqtt) e força reconexão com a config atual.
+            startBridge(RobotBridgeService.ACTION_RESTART)
         }
         binding.btnStop.setOnClickListener {
-            startService(Intent(this, BridgeService::class.java).apply { action = BridgeService.ACTION_STOP })
+            startService(Intent(this, RobotBridgeService::class.java).apply { action = RobotBridgeService.ACTION_STOP })
+            startService(Intent(this, MqttBridgeService::class.java).apply { action = RobotBridgeService.ACTION_STOP })
+        }
+        binding.btnSettings.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
         }
 
         ensureNotificationPermission()
-        // Inicia a ponte assim que a tela abre.
-        ContextCompat.startForegroundService(this, Intent(this, BridgeService::class.java))
+        // Inicia os dois processos da ponte automaticamente assim que a tela abre.
+        startBridge(null)
 
         observeStatus()
     }
@@ -45,17 +51,55 @@ class MainActivity : AppCompatActivity() {
             repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
                 StatusBus.state.collectLatest { s ->
                     binding.txtBroker.text = "Broker MQTT: ${onOff(s.brokerConnected)}"
+                    if (!s.brokerConnected && s.brokerError.isNotBlank()) {
+                        binding.txtBrokerError.visibility = android.view.View.VISIBLE
+                        binding.txtBrokerError.text = "↳ ${s.brokerError}"
+                    } else {
+                        binding.txtBrokerError.visibility = android.view.View.GONE
+                    }
+                    // Usuário EXATO enviado ao broker (entre aspas p/ revelar espaços) + senha mascarada.
+                    binding.txtBrokerAuth.text =
+                        "Auth: user='${s.brokerUser}' (${s.brokerUser.length}) senha=${"•".repeat(s.brokerPassLen)} (${s.brokerPassLen})"
                     binding.txtSdk.text = "SDK / Chassi: ${onOff(s.sdkConnected)}"
+                    if (!s.sdkConnected && s.sdkError.isNotBlank()) {
+                        binding.txtSdkError.visibility = android.view.View.VISIBLE
+                        binding.txtSdkError.text = "↳ ${s.sdkError}"
+                    } else {
+                        binding.txtSdkError.visibility = android.view.View.GONE
+                    }
+                    binding.txtSdkInfo.text =
+                        "Serviço bound: ${if (s.sdkBound) "sim" else "não"}  |  classe SDK: ${s.sdkClassTried}"
                     binding.txtService.text = "Serviço: ${if (s.serviceRunning) "RODANDO" else "PARADO"}"
                     binding.txtLastCmd.text = "Último comando: ${s.lastCommand}"
                     binding.txtVelocity.text = "v = %.2f m/s    w = %.2f rad/s".format(s.linear, s.angular)
                     binding.txtFront.text = "Dist. frontal: " +
                         if (s.frontCm.isNaN()) "—" else "%.0f cm".format(s.frontCm)
                     binding.txtBattery.text = "Bateria: " +
-                        if (s.batteryPct < 0) "—" else "${s.batteryPct}%"
+                        (if (s.batteryPct < 0) "—" else "${s.batteryPct}%") +
+                        (if (s.charging) " ⚡" else "")
+                    binding.txtPose.text = if (s.poseX.isNaN()) "Pose: —" else
+                        "Pose: x=%.2f  y=%.2f  yaw=%.0f°".format(s.poseX, s.poseY, s.poseYawDeg)
+                    // Telemetria viva? "SEM SINAL" se a última leitura tem mais de 3 s.
+                    val idadeMs = System.currentTimeMillis() - s.telemetryAt
+                    binding.txtTelemetry.text = when {
+                        s.telemetryAt == 0L -> "Telemetria: —"
+                        idadeMs > 3000 -> "Telemetria: SEM SINAL (${idadeMs / 1000}s)"
+                        else -> "Telemetria: ativa  |  Loc: ${if (s.localization < 0) "—" else "${s.localization}%"}"
+                    }
+                    binding.txtNet.text = s.netInfo.ifBlank { "—" }
                 }
             }
         }
+    }
+
+    /** Sobe os dois serviços de foreground (processo principal + :mqtt) com a ação opcional. */
+    private fun startBridge(action: String?) {
+        ContextCompat.startForegroundService(
+            this, Intent(this, RobotBridgeService::class.java).apply { action?.let { this.action = it } }
+        )
+        ContextCompat.startForegroundService(
+            this, Intent(this, MqttBridgeService::class.java).apply { action?.let { this.action = it } }
+        )
     }
 
     private fun onOff(v: Boolean) = if (v) "CONECTADO ✅" else "DESCONECTADO ❌"

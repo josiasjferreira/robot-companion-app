@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Necessária para requestNetwork (amarrar o MQTT à rede celular — split de rotas) -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- Serviço fica em foreground para sobreviver à tela apagada -->
@@ -10,6 +12,16 @@
     <!-- Necessário em Android 13+ para exibir a notificação do foreground service -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Visibilidade de pacotes (Android 11+/targetSdk 34): permite resolver e bindar
+         o serviço do RobotSDK (CSJBot) por ação/componente, mesmo estando em outro app.
+         Pacote do app do RobotSDK: com.csjbot.robotsdk.ten. -->
+    <queries>
+        <package android:name="com.csjbot.robotsdk.ten" />
+        <intent>
+            <action android:name="com.csjbot.robotsdkservice.startservice" />
+        </intent>
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -30,8 +42,23 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity" />
+
+        <!-- Processo PRINCIPAL: chassi (amarra à rede do robô 192.168.99.x) -->
         <service
-            android:name=".service.BridgeService"
+            android:name=".service.RobotBridgeService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Processo :mqtt ISOLADO: broker (amarra à rede de internet do tethering/hotspot).
+             Cada processo tem seu próprio bindProcessToNetwork — resolve o dual-homing. -->
+        <service
+            android:name=".service.MqttBridgeService"
+            android:process=":mqtt"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
