@@ -8,6 +8,27 @@ RobotSDK_release_i18n_2_4_0_43.aar
 
 (ou o `.aar`/`.jar` equivalente extraído do `RobotSDK_release_i18n_2_4_0_43.apk`).
 
+## ✅ RESOLVIDO (2026-07-02): o SDK já está no repositório
+
+O branch `claude/confident-ritchie-0n0dkc` contém
+`KenMotionBridge/app/libs/RobotSDK-client.jar` (1,9 MB), extraído do APK do
+próprio robô. Verificado via `javap`:
+
+- `com.slamtec.slamware.SlamwareCorePlatform.connect(String, int)` — estático ✓
+- `moveBy(com.slamtec.slamware.action.MoveDirection)` — enum FORWARD/BACKWARD/
+  TURN_LEFT/TURN_RIGHT (pacote é `action`, não `robot`) ✓
+- `getBatteryPercentage()`, `getPose()`, `getRealTimeVelocity()` (só leitura —
+  não existe setter de velocidade contínua; movimento é por `moveBy` discreto) ✓
+- **Sem JNI** (nenhum `loadLibrary` no jar) — não precisa de arquivos `.so`.
+- Dependências transitivas necessárias (já no `build.gradle` daquele branch):
+  `org.java-websocket:Java-WebSocket`, `com.google.code.gson:gson`,
+  `commons-io:commons-io`. (`com.github.luben:zstd-jni` só se usar
+  `CompositeMap`/compressão de mapas.)
+
+Não é necessário baixar o SDK público da Slamtec (2.8.2): a variante embarcada
+no Emy é o port CSJBot (WebSocket/Java puro), e o jar extraído bate 1:1 com o
+que roda no robô.
+
 ## Onde obter o AAR (fontes verificadas em 2026-07-01)
 
 O AAR **não está disponível publicamente**. Fontes checadas:
