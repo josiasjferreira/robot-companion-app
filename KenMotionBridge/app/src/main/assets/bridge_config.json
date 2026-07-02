@@ -3,9 +3,9 @@
 
   "mqtt": {
     "_comment": "Use ssl://HOST:8883 (MQTT/TLS nativo, recomendado no Android) OU wss://HOST:8884/mqtt para WebSocket. Mesmo broker do app web.",
-    "uri": "ssl://bc0a5bf3bb994fdaa6dddc72096bb220.s1.eu.hivemq.cloud:8883",
-    "username": "kenrobot",
-    "password": "Humanoide_2030$",
+    "uri": "ssl://SEU-CLUSTER.s1.eu.hivemq.cloud:8883",
+    "username": "ken-robot",
+    "password": "TROQUE-ME",
     "clientId": "ken-motion-bridge",
     "cleanSession": true,
     "keepAliveSec": 30,

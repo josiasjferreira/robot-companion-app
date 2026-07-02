@@ -1,5 +1,26 @@
 # Welcome to your Lovable project
 
+## Robô KEN (Amy CT300) — build de ponta a ponta
+
+Este repo contém a **UI** (web/Capacitor, controla via MQTT) e a **ponte**
+(`KenMotionBridge/`, app Android que fala com o chassi Slamware).
+
+```powershell
+# Windows (na raiz do repo)
+Copy-Item .env.example .env   # 1x: preencha as credenciais MQTT
+.\scripts\build-all.ps1       # builda UI + ponte; use -Install p/ instalar via adb
+```
+
+```bash
+# Linux/macOS
+cp .env.example .env          # 1x: preencha as credenciais MQTT
+./scripts/build-all.sh        # INSTALL=1 ./scripts/build-all.sh instala via adb
+```
+
+Pendência única para o robô se mover: colocar o `RobotSDK_*.aar` em
+`KenMotionBridge/app/libs/` — ver `KenMotionBridge/app/libs/PLACE_AAR_HERE.md`.
+Instalação no tablet: `KenMotionBridge/INSTALL_TABLET.md`.
+
 ## Project info
 
 **URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
