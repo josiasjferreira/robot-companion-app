@@ -86,7 +86,9 @@ class NetworkRouter(context: Context) {
         } catch (e: java.net.SocketTimeoutException) {
             "TIMEOUT"
         } catch (e: java.net.ConnectException) {
-            "RECUSADO(${e.message})"
+            val m = e.message ?: ""
+            // ECONNREFUSED = porta fechada; ENETUNREACH = sem rota (não é "recusa").
+            if (m.contains("refused", ignoreCase = true)) "RECUSADO($m)" else "SEM-ROTA($m)"
         } catch (e: java.net.UnknownHostException) {
             "DNS falhou"
         } catch (e: Exception) {

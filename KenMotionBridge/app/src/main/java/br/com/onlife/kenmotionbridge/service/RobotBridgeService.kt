@@ -136,12 +136,30 @@ class RobotBridgeService : Service() {
         }
     }
 
-    /** Amarra ESTE processo à rede do chassi mais alcançável agora e publica o diagnóstico. */
-    private fun applyChassisRouting() {
+    /**
+     * Amarra ESTE processo à rede do chassi e VERIFICA com dados: em robôs onde o
+     * fabricante configura o IP da Ethernet por fora do Android (IP estático direto
+     * na interface), a rota ao chassi existe só na tabela principal do kernel — a
+     * tabela da Network do Android fica sem ela e o bind gera "Network is
+     * unreachable". Nesse caso o TCP fecha DESAMARRADO; então desfazemos o bind.
+     */
+    private fun applyChassisRouting(quiet: Boolean = false) {
         if (!config.dualHoming) return
         val chassi = networkRouter.findChassisNetwork(config.chassisIp, config.chassisPort)
-        val bound = chassi != null && networkRouter.bindProcess(chassi)
-        val probe = networkRouter.probeTcp(config.chassisIp, config.chassisPort, if (bound) chassi else null)
+        var bound = chassi != null && networkRouter.bindProcess(chassi)
+        var probe = networkRouter.probeTcp(config.chassisIp, config.chassisPort, if (bound) chassi else null)
+        if (bound && probe != "OK") {
+            networkRouter.release()
+            val plain = networkRouter.probeTcp(config.chassisIp, config.chassisPort, null)
+            if (plain == "OK") {
+                bound = false
+                probe = "OK (rota padrão, SEM bind)"
+            } else {
+                chassi?.let { networkRouter.bindProcess(it) } // nenhum caminho fechou; mantém o bind
+                probe = "$probe | rota padrão=$plain"
+            }
+        }
+        if (quiet) return
         val diag = networkRouter.describe(config.chassisIp) +
             "\n→ chassi=${chassi ?: "NÃO ACHADA"} bind=${if (bound) "SIM" else "não"}" +
             "\n→ TCP ${config.chassisIp}:${config.chassisPort} = $probe" +
@@ -150,11 +168,7 @@ class RobotBridgeService : Service() {
         StatusBus.update { it.copy(netInfo = diag) }
     }
 
-    private fun rebindChassisQuiet() {
-        if (!config.dualHoming) return
-        networkRouter.findChassisNetwork(config.chassisIp, config.chassisPort)
-            ?.let { networkRouter.bindProcess(it) }
-    }
+    private fun rebindChassisQuiet() = applyChassisRouting(quiet = true)
 
     private fun restartConnections() {
         scope.launch {
