@@ -67,6 +67,15 @@ dependencies {
     implementation 'com.google.code.gson:gson:2.10.1'
     implementation 'commons-io:commons-io:2.13.0'
 
+    // ── Caminho REAL do chassi (descoberto via javap): SlamwareCorePlatform.connect
+    // delega a com.csjbot.cosclient.CosClientAgent (protocolo CSJBot sobre netty).
+    // Sem estas classes o connect degrada no genérico
+    // "ConnectionFailException: Connection Failed" mesmo com TCP 1445 aberto.
+    implementation 'io.netty:netty-all:4.1.100.Final'
+    implementation 'org.slf4j:slf4j-api:1.7.36'
+    implementation 'org.slf4j:slf4j-nop:1.7.36'
+    implementation 'org.greenrobot:eventbus:3.3.1'
+
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.24'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 
