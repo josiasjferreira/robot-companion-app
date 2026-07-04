@@ -63,6 +63,18 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
+        <!-- Callback do RobotSDK (contrato oficial, ver docs/PROTOCOLO_ROBOTSDK.md):
+             após connectToSDK(), o app do fabricante binda AQUI (ação com.csjbot.sdk.connect)
+             e entrega eventos via ISdkAppToAar.sdkAppMsgToAar(json). Precisa ser exported. -->
+        <service
+            android:name=".sdk.SdkCallbackService"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.csjbot.sdk.connect" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".service.BootReceiver"
             android:enabled="true"

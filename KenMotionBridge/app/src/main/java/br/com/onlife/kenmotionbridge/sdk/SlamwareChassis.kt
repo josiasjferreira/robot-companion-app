@@ -8,7 +8,6 @@ import android.os.IBinder
 import android.util.Log
 import br.com.onlife.kenmotionbridge.BridgeConfig
 import com.csjbot.sdkhandler.IAarToSdkApp
-import com.csjbot.sdkhandler.ISdkAppToAar
 import org.json.JSONObject
 import java.lang.reflect.Method
 
@@ -66,8 +65,9 @@ class SlamwareChassis(
     /** Instância reutilizada de RealTimeVelocity. */
     @Volatile private var rtv: Any? = null
 
-    private var sdkBinder: ISdkAppToAar? = null
-    /** Informação do chassi retornada pelo SDK (endereço:porta ou JSON com parâmetros). */
+    /** Binder do RobotSdkService (contrato OFICIAL: MyBinder extends IAarToSdkApp.Stub). */
+    private var sdkBinder: IAarToSdkApp? = null
+    /** Informação/eventos do SDK (chegam via SdkCallbackService -> SdkLink). */
     @Volatile private var chassisInfo: String? = null
     /** Verdadeiro se estamos usando o caminho do SDK (AIDL) em vez de reflexão direta. */
     @Volatile private var usingAarPath: Boolean = false
@@ -75,35 +75,25 @@ class SlamwareChassis(
 
     private fun report() = onStatus(connected, sdkError, bound, classTried)
 
-    private val aarCallback = object : IAarToSdkApp.Stub() {
-        override fun onSdkReady(info: String?) {
-            chassisInfo = info
-            Log.i(TAG, "SDK host pronto: $info")
-            // Sinaliza que estamos usando o caminho do SDK (AIDL) em vez de reflexão direta.
-            usingAarPath = true
-        }
-        override fun onSdkEvent(what: Int, payload: String?) {
-            Log.d(TAG, "Evento SDK what=$what payload=$payload")
-        }
-    }
-
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            sdkBinder = ISdkAppToAar.Stub.asInterface(binder)
+            sdkBinder = IAarToSdkApp.Stub.asInterface(binder)
             bound = true
             sdkError = ""
             Log.i(TAG, "RobotSdkService bound (${name?.shortClassName})")
+            // Handshake oficial (docs/PROTOCOLO_ROBOTSDK.md): connectToSDK(appName).
+            // O SDK binda DE VOLTA no SdkCallbackService (ação com.csjbot.sdk.connect),
+            // confirma com connectToSDKSucceed() e entrega eventos por sdkAppMsgToAar(json).
+            SdkLink.reset()
+            SdkLink.setListener { msg ->
+                chassisInfo = msg
+                usingAarPath = true
+            }
             runCatching {
-                sdkBinder?.register(aarCallback)
-                val info = sdkBinder?.requestChassis()
-                Log.i(TAG, "Callback registrado; requestChassis=$info")
-                // Sucesso no handshake: chassis será controlado via AIDL (onSdkReady receberá a info).
-                connected = true
+                sdkBinder?.connectToSDK(context.packageName)
+                Log.i(TAG, "connectToSDK('${context.packageName}') enviado; aguardando bind-back do SDK")
             }.onFailure {
-                // Serviço bound, mas a interface AIDL não casou (descriptor diferente do AAR oficial).
-                sdkError = "handshake AIDL falhou: ${it.message} " +
-                    "(ISdkAppToAar pode diferir do AAR oficial — tente extrair do APK do fabricante)"
-                connected = platform != null  // Apenas se houver fallback de reflexão.
+                sdkError = "handshake AIDL falhou: ${it.message}"
                 Log.w(TAG, sdkError, it)
             }
             report()
@@ -125,7 +115,7 @@ class SlamwareChassis(
      *
      * Solução 2 (AIDL): se a conexão direta falha, tenta bindar ao RobotSdkService do
      * fabricante. Se o handshake AIDL suceder, tenta conectar usando a informação
-     * retornada por requestChassis() (que pode ser um endereço remoto ou um proxy).
+     * entregue pelo SDK via sdkAppMsgToAar (pode ser um endereço remoto ou um proxy).
      */
     fun connect(): Boolean {
         classTried = PLATFORM_CLS
@@ -142,7 +132,7 @@ class SlamwareChassis(
         if (!connected && config.useCsjbotBinding) {
             Log.i(TAG, "Conexão direta falhou; tentando fallback de bind AIDL ao RobotSdkService")
             bindCsjbot()
-            // Aguarda um pouco para o handshake AIDL completar (onSdkReady/requestChassis).
+            // Aguarda um pouco para o handshake AIDL completar (connectToSDKSucceed/sdkAppMsgToAar).
             Thread.sleep(500L)
             // Se o AIDL forneceu informações do chassi, tenta conectar via Solução 2.
             if (bound && !connected && !chassisInfo.isNullOrEmpty()) {
@@ -309,7 +299,7 @@ class SlamwareChassis(
     }
 
     fun disconnect() {
-        runCatching { sdkBinder?.unregister(aarCallback) }
+        SdkLink.setListener(null)
         runCatching { context.unbindService(serviceConnection) }
         sdkBinder = null
         bound = false
@@ -319,6 +309,14 @@ class SlamwareChassis(
         connected = false
         chassisInfo = null
         report()
+    }
+
+    /** Envia um comando JSON ao RobotSDK pelo canal AIDL oficial (aarMsgToSDKApp). */
+    fun sendSdkMessage(json: String): Boolean {
+        val b = sdkBinder ?: return false
+        return runCatching { b.aarMsgToSDKApp(json); true }
+            .onFailure { warnOnce("aarMsgToSDKApp", it) }
+            .getOrDefault(false)
     }
 
     // ── Controle de velocidade ──────────────────────────────────────────────
