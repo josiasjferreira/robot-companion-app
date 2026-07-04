@@ -70,7 +70,15 @@ data class BridgeConfig(
             uri.substringAfter("://").substringAfter(":", "").substringBefore("/")
                 .toIntOrNull() ?: 8883
 
-        /** Persiste os valores da tela de Configurações. */
+        /**
+         * Arquivo de settings compartilhado entre processos. SharedPreferences NÃO é
+         * confiável entre processos (o :mqtt lia valores velhos/vazios e caía no
+         * placeholder do asset — na tela: ora "SEU-CLUSTER", ora o host real).
+         * Um arquivo com escrita atômica (tmp+rename) é lido sempre fresco do disco.
+         */
+        private fun settingsFile(context: Context) = File(context.filesDir, "bridge_settings.json")
+
+        /** Persiste os valores da tela de Configurações (arquivo multi-processo + prefs legadas). */
         fun saveSettings(
             context: Context, host: String, port: Int, user: String, pass: String,
             forceCellular: Boolean,
@@ -82,6 +90,19 @@ data class BridgeConfig(
                 .putString(KEY_PASS, pass.trim())
                 .putBoolean(KEY_FORCE_CELL, forceCellular)
                 .apply()
+
+            val json = JSONObject()
+                .put("host", host.trim())
+                .put("port", port)
+                .put("user", user.trim())
+                .put("pass", pass.trim())
+                .put("forceCellular", forceCellular)
+            runCatching {
+                val f = settingsFile(context)
+                val tmp = File(f.parentFile, f.name + ".tmp")
+                tmp.writeText(json.toString())
+                if (!tmp.renameTo(f)) { f.writeText(json.toString()); tmp.delete() }
+            }.onFailure { Log.e(TAG, "Falha ao gravar settings em arquivo: ${it.message}") }
         }
 
         fun load(context: Context): BridgeConfig {
@@ -97,20 +118,23 @@ data class BridgeConfig(
             val chassis = merged.optJSONObject("chassis") ?: JSONObject()
             val motion = merged.optJSONObject("motion") ?: JSONObject()
 
-            // Override da TELA de configurações (SharedPreferences) — prioridade máxima.
+            // Override da TELA de configurações — prioridade máxima. Fonte primária: o
+            // ARQUIVO multi-processo; prefs ficam como fallback legado (instalações antigas).
             val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            val spHost = sp.getString(KEY_HOST, null)?.trim().orEmpty()
+            val fileJson = runCatching { JSONObject(settingsFile(context).readText()) }.getOrNull()
+            val spHost = (fileJson?.optString("host")?.ifEmpty { null }
+                ?: sp.getString(KEY_HOST, null))?.trim().orEmpty()
+            val spPort = fileJson?.optInt("port", 8883) ?: sp.getInt(KEY_PORT, 8883)
             // Host de placeholder (ex.: SEU-CLUSTER…) gravado por engano é IGNORADO → cai no asset.
             val spHostValid = spHost.isNotEmpty() && !spHost.contains("SEU-CLUSTER", ignoreCase = true)
             val uriFromAsset = mqtt.optString("uri", "ssl://localhost:8883")
-            val mqttUri = if (spHostValid) {
-                val port = sp.getInt(KEY_PORT, 8883)
-                "ssl://$spHost:$port"
-            } else uriFromAsset
-            // Usuário/senha das prefs (se preenchidos) — INDEPENDENTES do host, para não perder a
+            val mqttUri = if (spHostValid) "ssl://$spHost:$spPort" else uriFromAsset
+            // Usuário/senha do override (se preenchidos) — INDEPENDENTES do host, para não perder a
             // senha real quando o host salvo for um placeholder. TRIM remove espaços/quebras coladas.
-            val spUser = sp.getString(KEY_USER, null)?.trim().orEmpty()
-            val spPass = sp.getString(KEY_PASS, null)?.trim().orEmpty()
+            val spUser = (fileJson?.optString("user")?.ifEmpty { null }
+                ?: sp.getString(KEY_USER, null))?.trim().orEmpty()
+            val spPass = (fileJson?.optString("pass")?.ifEmpty { null }
+                ?: sp.getString(KEY_PASS, null))?.trim().orEmpty()
             val mqttUser = (if (spUser.isNotEmpty()) spUser else mqtt.optString("username", "")).trim()
             val mqttPassword = (if (spPass.isNotEmpty()) spPass else mqtt.optString("password", "")).trim()
 
@@ -122,7 +146,8 @@ data class BridgeConfig(
                 cleanSession = mqtt.optBoolean("cleanSession", true),
                 keepAliveSec = mqtt.optInt("keepAliveSec", 30),
                 tlsInsecure = mqtt.optBoolean("tlsInsecure", false),
-                mqttForceCellular = sp.getBoolean(KEY_FORCE_CELL, mqtt.optBoolean("forceCellular", false)),
+                mqttForceCellular = fileJson?.optBoolean("forceCellular", false)
+                    ?: sp.getBoolean(KEY_FORCE_CELL, mqtt.optBoolean("forceCellular", false)),
                 dualHoming = mqtt.optBoolean("dualHoming", true),
                 topicCmd = topics.optString("cmd", "ken/motion/cmd"),
                 topicFeedback = topics.optString("feedback", "ken/motion/feedback"),

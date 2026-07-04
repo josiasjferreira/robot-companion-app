@@ -187,28 +187,35 @@ class SlamwareChassis(
 
     private fun connectSlamware() {
         classTried = PLATFORM_CLS
-        try {
-            val cls = Class.forName(PLATFORM_CLS)
-            // SlamwareCorePlatform.connect(String ip, int port)  (estático)
-            val connect: Method = cls.getMethod("connect", String::class.java, Int::class.javaPrimitiveType)
-            platform = connect.invoke(null, config.chassisIp, config.chassisPort)
-            // Confirma o canal direto (getDCIsConnected), se exposto.
-            val dcOk = (invokeReturningDouble(platform, "getDCIsConnected") ?: 1.0) != 0.0
-            if (platform != null && dcOk) {
-                connected = true
-                bound = false
-                sdkError = ""
-                Log.i(TAG, "Slamware CONECTADO (direto) em ${config.chassisIp}:${config.chassisPort}")
-            } else {
+        // O chassi pode recusar a sessão SDP transitoriamente (ex.: logo após boot ou
+        // enquanto o app do fabricante renegocia). 3 tentativas espaçadas.
+        val attempts = 3
+        for (attempt in 1..attempts) {
+            try {
+                val cls = Class.forName(PLATFORM_CLS)
+                // SlamwareCorePlatform.connect(String ip, int port)  (estático)
+                val connect: Method = cls.getMethod("connect", String::class.java, Int::class.javaPrimitiveType)
+                platform = connect.invoke(null, config.chassisIp, config.chassisPort)
+                // Confirma o canal direto (getDCIsConnected), se exposto.
+                val dcOk = (invokeReturningDouble(platform, "getDCIsConnected") ?: 1.0) != 0.0
+                if (platform != null && dcOk) {
+                    connected = true
+                    bound = false
+                    sdkError = ""
+                    Log.i(TAG, "Slamware CONECTADO (direto) em ${config.chassisIp}:${config.chassisPort} (tentativa $attempt)")
+                    return
+                } else {
+                    connected = false
+                    setErrorIfEmpty(
+                        "Chassi inacessível — ${config.chassisIp}:${config.chassisPort} (conexão direta não estabelecida)"
+                    )
+                }
+            } catch (t: Throwable) {
                 connected = false
-                setErrorIfEmpty(
-                    "Chassi inacessível — ${config.chassisIp}:${config.chassisPort} (conexão direta não estabelecida)"
-                )
+                sdkError = "${classifySlamware(t)} [tentativa $attempt/$attempts]"
+                Log.e(TAG, "Falha Slamware (direto, tentativa $attempt/$attempts): ${t.message}", t)
             }
-        } catch (t: Throwable) {
-            connected = false
-            setErrorIfEmpty(classifySlamware(t))
-            Log.e(TAG, "Falha Slamware (direto): ${t.message}", t)
+            if (attempt < attempts) Thread.sleep(1500L)
         }
     }
 
