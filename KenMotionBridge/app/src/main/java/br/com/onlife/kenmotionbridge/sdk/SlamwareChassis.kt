@@ -169,15 +169,12 @@ class SlamwareChassis(
             context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         } catch (se: SecurityException) {
             // Não sobrescreve o motivo REAL da conexão direta (Abordagem 1), se houver.
-            setErrorIfEmpty("bind negado — sem permissão para o serviço ${component.packageName} (${se.message})")
+            appendError("bind negado — sem permissão (${se.message})")
             Log.e(TAG, "bind negado: ${se.message}")
             return
         }
         if (!ok) {
-            setErrorIfEmpty(
-                "RobotSdkService não encontrado/indisponível — ${component.packageName}/${component.shortClassName} " +
-                    "não instalado, não exportado ou sem permissão (confira o app do RobotSDK e o <queries> no manifest)"
-            )
+            appendError("bind=false em ${component.packageName} (app do RobotSDK instalado? exportado?)")
             Log.e(TAG, "bindService retornou false para ${component.packageName}/${component.shortClassName}")
         } else {
             if (sdkError.isEmpty()) sdkError = "aguardando handshake do RobotSdkService ($CSJBOT_PKG)…"
@@ -257,6 +254,11 @@ class SlamwareChassis(
     /** Só grava o erro se ainda não houver um — preserva o motivo do caminho primário. */
     private fun setErrorIfEmpty(msg: String) {
         if (sdkError.isEmpty()) sdkError = msg
+    }
+
+    /** Anexa um motivo ao erro atual sem apagar o principal (aparece na tela). */
+    private fun appendError(msg: String) {
+        sdkError = if (sdkError.isEmpty()) msg else "$sdkError | $msg"
     }
 
     /** Traduz a falha da reflexão Slamware num motivo específico. */

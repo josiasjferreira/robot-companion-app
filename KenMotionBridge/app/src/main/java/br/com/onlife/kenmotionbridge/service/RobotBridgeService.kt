@@ -160,9 +160,22 @@ class RobotBridgeService : Service() {
             }
         }
         if (quiet) return
+        // Sonda candidatos a nucleo Slamware: o que responde TCP em .99.2 pode ser a
+        // placa CSJBot (proxy); o modulo Slamware de fabrica usa 192.168.11.1.
+        val candidates = linkedSetOf(config.chassisIp, "192.168.99.1", "192.168.11.1")
+        val sdpScan = candidates.filter { it != config.chassisIp }.joinToString("") {
+            "\n→ TCP $it:${config.chassisPort} = " + networkRouter.probeTcp(it, config.chassisPort, null)
+        }
+        val csjApps = runCatching {
+            packageManager.getInstalledApplications(0)
+                .map { it.packageName }.filter { it.startsWith("com.csjbot") }
+        }.getOrDefault(emptyList())
+        val appsLine = "\n→ apps CSJBot: " +
+            (if (csjApps.isEmpty()) "NENHUM instalado neste tablet!" else csjApps.joinToString(", "))
         val diag = networkRouter.describe(config.chassisIp) +
             "\n→ chassi=${chassi ?: "NÃO ACHADA"} bind=${if (bound) "SIM" else "não"}" +
             "\n→ TCP ${config.chassisIp}:${config.chassisPort} = $probe" +
+            sdpScan + appsLine +
             "\n→ MQTT: processo :mqtt (rede própria)"
         Log.i(TAG, "Redes:\n$diag")
         StatusBus.update { it.copy(netInfo = diag) }
