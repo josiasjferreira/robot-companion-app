@@ -213,6 +213,9 @@ class MqttBridgeService : Service() {
 
     private fun reconnect() {
         config = BridgeConfig.load(this)
+        // Injeta a config recém-carregada no manager ANTES de reconectar — sem isto o
+        // Paho reconectava com o host/senha do boot do processo (config velha).
+        mqtt.config = config
         runCatching { mqtt.reconnectNow("reiniciar ponte") }
     }
 

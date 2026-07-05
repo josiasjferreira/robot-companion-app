@@ -54,7 +54,12 @@ import javax.net.ssl.X509TrustManager
  */
 class MqttManager(
     private val context: Context,
-    private val config: BridgeConfig,
+    /**
+     * Config MUTÁVEL: o service injeta a config recém-salva antes de reconectar
+     * (BUG corrigido: o manager ficava preso à config do boot do processo e
+     * reconectava com host/senha VELHOS mesmo após salvar nas Configurações).
+     */
+    @Volatile var config: BridgeConfig,
     /** (conectado, mensagemDeErro?) — erro só vem preenchido quando conectado=false. */
     private val onConnectionChanged: (Boolean, String?) -> Unit,
     private val onCommand: (String) -> Unit,
