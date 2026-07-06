@@ -424,6 +424,45 @@ class SlamwareChassis(
         return listOf(st, rs).filter { it.isNotEmpty() && it != "null" }.joinToString(" · ")
     }
 
+    /**
+     * Resumo da câmera de profundidade frontal (RGBD) — a que alimenta o desvio de
+     * obstáculo que bloqueia a FRENTE. Mostra nº de pontos e a menor distância à
+     * frente. Se houver um "obstáculo fantasma" perto (câmera descalibrada/suja),
+     * o firmware recusa o avanço mesmo com saúde OK. Distâncias em metros.
+     */
+    fun frontDepthSummary(): String {
+        val p = platform ?: return ""
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            val pts = p.javaClass.getMethod("getDepthSensorData").invoke(p) as? List<Any> ?: return "depth: n/d"
+            if (pts.isEmpty()) return "depth: 0 pts (câmera sem leitura)"
+            var minAhead = Double.MAX_VALUE
+            var minAny = Double.MAX_VALUE
+            for (pt in pts) {
+                val x = (runCatching { pt.javaClass.getMethod("getX").invoke(pt) as Float }.getOrNull() ?: 0f).toDouble()
+                val y = (runCatching { pt.javaClass.getMethod("getY").invoke(pt) as Float }.getOrNull() ?: 0f).toDouble()
+                val z = (runCatching { pt.javaClass.getMethod("getZ").invoke(pt) as Float }.getOrNull() ?: 0f).toDouble()
+                val range = Math.sqrt(x * x + y * y + z * z)
+                if (range in 0.01..minAny) minAny = range
+                if (x > 0.05 && range in 0.01..minAhead) minAhead = range   // pontos à FRENTE (x+)
+            }
+            val ahead = if (minAhead == Double.MAX_VALUE) "sem ponto à frente" else "min frente %.2fm".format(minAhead)
+            val any = if (minAny == Double.MAX_VALUE) "" else " · min geral %.2fm".format(minAny)
+            "depth: ${pts.size} pts · $ahead$any"
+        } catch (e: NoSuchMethodException) {
+            "depth: API ausente"
+        } catch (t: Throwable) {
+            "depth: erro ${t.cause?.message ?: t.message}"
+        }
+    }
+
+    /** Estado de calibração da câmera RGBD (frente). Descalibrada -> obstáculo fantasma. */
+    fun rgbdCalibState(): String = runCatching {
+        val p = platform ?: return ""
+        val st = p.javaClass.getMethod("getRGBDParamCalibrationState").invoke(p) ?: return "rgbd: n/d"
+        st.toString()
+    }.getOrDefault("")
+
     /** Saúde do chassi na voz do firmware (E-stop, LIDAR, câmera de profundidade, erros). */
     fun healthSummary(): String {
         val p = platform ?: return "sem plataforma"
