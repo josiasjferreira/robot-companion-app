@@ -110,6 +110,16 @@ class KenMotionSdk(private val chassis: SlamwareChassis? = null) {
     fun virarDireita(angulo: Int? = null, velocidade: Float? = null) =
         comandoRotacao("virarDireita", contInuo = "turnRight", angulo = angulo, sinalAngulo = -1, velocidade = velocidade)
 
+    /**
+     * Define as velocidades do chassi no RobotSDK (linear em m/s e/ou angular em rad/s).
+     * Usado pelo despacho discreto do joystick (setSpeed/setAngularVelocity do IChassisReq).
+     */
+    fun definirVelocidades(linear: Float?, angular: Float?) {
+        val alvo = proxy ?: robot ?: return
+        linear?.let { invokeFloat(alvo, "setSpeed", it.coerceIn(0f, VELOCIDADE_MAX)) }
+        angular?.let { invokeFloat(alvo, "setAngularVelocity", it.coerceIn(0f, VELOCIDADE_ANGULAR_MAX)) }
+    }
+
     /** Interrompe QUALQUER movimento em andamento (navegação + velocidade em tempo real). */
     fun pararMovimento() {
         Log.i(TAG, "pararMovimento — enviando comando de parada ao robô…")

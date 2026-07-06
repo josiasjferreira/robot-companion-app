@@ -106,6 +106,7 @@ class MotionController(
         currentV = 0.0; currentW = 0.0
         chassis.cancelAction()
         chassis.sendVelocity(0.0, 0.0)
+        stopDrive()
         lastCommandLabel = "stop"
         lastCommandAt = System.currentTimeMillis()
     }
@@ -136,7 +137,59 @@ class MotionController(
         currentV = clamp(currentV, -config.vMaxBoost, config.vMaxBoost)
         currentW = clamp(currentW, -config.wMax, config.wMax)
 
-        chassis.sendVelocity(currentV, currentW)
+        dispatchDrive(currentV, currentW)
+    }
+
+    // ── Despacho DISCRETO (o que este RobotSDK realmente executa) ────────────
+    // Verificado via javap no RobotSDK-client.jar: NÃO existe setter de velocidade
+    // contínua (sendVelocity degrada em no-op). O movimento real é
+    // moveBy(FORWARD/BACKWARD/TURN_LEFT/TURN_RIGHT) reemitido enquanto o joystick
+    // segura a direção, com setSpeed/setAngularVelocity regulando a intensidade.
+
+    @Volatile private var lastDir: SlamwareChassis.Dir? = null
+    private var lastMoveByAt = 0L
+    private var lastSpeedSent = -1.0
+    private var lastAngSent = -1.0
+
+    private fun dispatchDrive(v: Double, w: Double) {
+        // Mantido: inofensivo neste SDK e útil se outra variante expuser velocidade real.
+        chassis.sendVelocity(v, w)
+
+        val vAbs = abs(v)
+        val wAbs = abs(w)
+        val dir = when {
+            vAbs < 0.03 && wAbs < 0.08 -> null
+            vAbs >= wAbs * 0.5 -> if (v > 0) SlamwareChassis.Dir.FORWARD else SlamwareChassis.Dir.BACKWARD
+            else -> if (w > 0) SlamwareChassis.Dir.TURN_LEFT else SlamwareChassis.Dir.TURN_RIGHT
+        }
+        if (dir == null) { stopDrive(); return }
+
+        // Intensidade no RobotSDK (linear m/s; angular rad/s). Só reenvia quando muda.
+        if (abs(vAbs - lastSpeedSent) > 0.02) {
+            motionSdk?.definirVelocidades(vAbs.toFloat(), null)
+            lastSpeedSent = vAbs
+        }
+        if (abs(wAbs - lastAngSent) > 0.05) {
+            motionSdk?.definirVelocidades(null, wAbs.toFloat())
+            lastAngSent = wAbs
+        }
+
+        // Reemite o passo enquanto a direção segue ativa (ações moveBy são curtas).
+        val now = System.currentTimeMillis()
+        if (dir != lastDir || now - lastMoveByAt > 300L) {
+            chassis.moveBy(dir)
+            lastDir = dir
+            lastMoveByAt = now
+        }
+    }
+
+    private fun stopDrive() {
+        if (lastDir == null) return
+        lastDir = null
+        lastSpeedSent = -1.0
+        lastAngSent = -1.0
+        chassis.cancelAction()
+        motionSdk?.definirVelocidades(0f, 0f)
     }
 
     /** Aplica deadzone e re-escala o restante para [0,1] preservando o sinal. */
