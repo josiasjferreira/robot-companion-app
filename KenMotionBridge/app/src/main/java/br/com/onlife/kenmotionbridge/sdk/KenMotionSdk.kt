@@ -120,6 +120,31 @@ class KenMotionSdk(private val chassis: SlamwareChassis? = null) {
         angular?.let { invokeFloat(alvo, "setAngularVelocity", it.coerceIn(0f, VELOCIDADE_ANGULAR_MAX)) }
     }
 
+    /**
+     * Movimento pelo primitivo NATIVO CSJBot (`Robot.moveForward/moveBack/moveLeft/moveRight`
+     * → `ClientReqProxy.move(0..3)`), que NÃO passa pelo desvio de obstáculo do Slamware.
+     * Usado para a FRENTE, que o `moveBy(FORWARD)` do Slamware recusa. @return true se enviou.
+     */
+    fun moverNativo(dir: SlamwareChassis.Dir): Boolean {
+        val r = robot ?: return false
+        val metodo = when (dir) {
+            SlamwareChassis.Dir.FORWARD -> "moveForward"
+            SlamwareChassis.Dir.BACKWARD -> "moveBack"
+            SlamwareChassis.Dir.TURN_LEFT -> "moveLeft"
+            SlamwareChassis.Dir.TURN_RIGHT -> "moveRight"
+        }
+        val ok = invoke(r, metodo, emptyArray(), emptyArray())
+        if (ok) Log.i(TAG, "moverNativo($metodo) → move() CSJBot")
+        return ok
+    }
+
+    /** Para o movimento nativo CSJBot (setSpeed/setAngularVelocity = 0). */
+    fun pararNativo() {
+        val p = proxy ?: robot ?: return
+        invokeFloat(p, "setSpeed", 0f)
+        invokeFloat(p, "setAngularVelocity", 0f)
+    }
+
     /** Interrompe QUALQUER movimento em andamento (navegação + velocidade em tempo real). */
     fun pararMovimento() {
         Log.i(TAG, "pararMovimento — enviando comando de parada ao robô…")

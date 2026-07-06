@@ -177,10 +177,26 @@ class MotionController(
         // Reemite o passo enquanto a direção segue ativa (ações moveBy são curtas).
         val now = System.currentTimeMillis()
         if (dir != lastDir || now - lastMoveByAt > 300L) {
-            chassis.moveBy(dir)
+            drive(dir)
             lastDir = dir
             lastMoveByAt = now
         }
+    }
+
+    /**
+     * Emite um passo de movimento na direção [dir].
+     *
+     * FRENTE: o `moveBy(FORWARD)` do Slamware é bloqueado pelo desvio de obstáculo
+     * frontal (LIDAR/depth) e recusa o avanço mesmo em espaço livre. Usamos então o
+     * primitivo NATIVO do RobotSDK CSJBot (`Robot.moveForward()` → `move(0)`), que
+     * é o teleop do fabricante e não passa por essa camada. Se o caminho nativo não
+     * estiver disponível, cai no Slamware. RÉ/GIROS seguem no Slamware (funcionam).
+     */
+    private fun drive(dir: SlamwareChassis.Dir) {
+        if (dir == SlamwareChassis.Dir.FORWARD) {
+            if (motionSdk?.moverNativo(dir) == true) return
+        }
+        chassis.moveBy(dir)
     }
 
     private fun stopDrive() {
@@ -189,6 +205,7 @@ class MotionController(
         lastSpeedSent = -1.0
         lastAngSent = -1.0
         chassis.cancelAction()
+        motionSdk?.pararNativo()          // para o move(0) nativo (frente)
         motionSdk?.definirVelocidades(0f, 0f)
     }
 
