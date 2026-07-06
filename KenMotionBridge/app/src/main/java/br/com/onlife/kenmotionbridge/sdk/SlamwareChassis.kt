@@ -379,6 +379,38 @@ class SlamwareChassis(
     /** Última ação de movimento (IMoveAction) para permitir cancelamento. */
     @Volatile private var lastAction: Any? = null
 
+    /** Status/motivo da última ação moveBy — na voz do firmware (ex.: BLOCKED · reason). */
+    fun lastActionStatus(): String {
+        val a = lastAction ?: return ""
+        val st = runCatching { a.javaClass.getMethod("getStatus").invoke(a)?.toString() }.getOrNull().orEmpty()
+        val rs = runCatching { a.javaClass.getMethod("getReason").invoke(a)?.toString() }.getOrNull().orEmpty()
+        return listOf(st, rs).filter { it.isNotEmpty() && it != "null" }.joinToString(" · ")
+    }
+
+    /** Saúde do chassi na voz do firmware (E-stop, LIDAR, câmera de profundidade, erros). */
+    fun healthSummary(): String {
+        val p = platform ?: return "sem plataforma"
+        return try {
+            val h = p.javaClass.getMethod("getRobotHealth").invoke(p) ?: return "indisponível"
+            fun flag(name: String): Boolean? =
+                runCatching { h.javaClass.getMethod(name).invoke(h) as? Boolean }.getOrNull()
+            val parts = mutableListOf<String>()
+            if (flag("getHasSystemEmergencyStop") == true) parts.add("E-STOP ATIVO!")
+            if (flag("getHasLidarDisconnected") == true) parts.add("LIDAR desconectado")
+            if (flag("getHasDepthCameraDisconnected") == true) parts.add("câmera profundidade OFF")
+            val errs = runCatching { h.javaClass.getMethod("getErrors").invoke(h) as? java.util.ArrayList<*> }
+                .getOrNull()
+            errs?.take(3)?.forEach { e ->
+                val msg = runCatching { e.javaClass.getMethod("getErrorMessage").invoke(e)?.toString() }.getOrNull()
+                val code = runCatching { e.javaClass.getMethod("getErrorCode").invoke(e)?.toString() }.getOrNull()
+                parts.add(("[" + (code ?: "?") + "] " + (msg ?: "")).trim())
+            }
+            if (parts.isEmpty()) "OK (sem erros reportados)" else parts.joinToString("; ")
+        } catch (t: Throwable) {
+            "erro ao ler: ${t.message}"
+        }
+    }
+
     /** Move o chassi numa direção discreta: platform.moveBy(MoveDirection). */
     fun moveBy(dir: Dir): Boolean {
         val p = platform ?: return false

@@ -63,6 +63,10 @@ class RobotBridgeService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var freshlyCreated = false
 
+    /** Diag de redes base (a saúde do chassi é anexada a cada ~3 s). */
+    @Volatile private var baseNetDiag: String = ""
+    private var healthTickCount = 0
+
     /** Canal de volta para o processo :mqtt publicar feedback/telemetria. */
     @Volatile private var feedbackSink: IFeedbackSink? = null
 
@@ -178,6 +182,7 @@ class RobotBridgeService : Service() {
             sdpScan + appsLine +
             "\n→ MQTT: processo :mqtt (rede própria)"
         Log.i(TAG, "Redes:\n$diag")
+        baseNetDiag = diag
         StatusBus.update { it.copy(netInfo = diag) }
     }
 
@@ -266,6 +271,16 @@ class RobotBridgeService : Service() {
         if (online) {
             val tj = chassis.telemetryJson().apply { put("ts", now) }
             sendTelemetry(tj.toString())
+        }
+
+        // Saúde do chassi na VOZ do firmware (E-stop/LIDAR/erros) + status da última
+        // ação moveBy (ex.: BLOCKED · reason) — anexadas ao diag da tela a cada ~3 s.
+        if (online && baseNetDiag.isNotEmpty() && ++healthTickCount % 3 == 0) {
+            val health = chassis.healthSummary()
+            val action = chassis.lastActionStatus()
+            val extra = "\n→ saúde chassi: " + health +
+                (if (action.isNotEmpty()) "\n→ última ação: " + action else "")
+            StatusBus.update { it.copy(netInfo = baseNetDiag + extra) }
         }
         updateNotification()
     }

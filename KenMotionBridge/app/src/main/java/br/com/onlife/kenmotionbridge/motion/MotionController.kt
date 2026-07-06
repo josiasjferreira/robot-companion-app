@@ -186,17 +186,22 @@ class MotionController(
     /**
      * Emite um passo de movimento na direção [dir].
      *
-     * FRENTE: o `moveBy(FORWARD)` do Slamware é bloqueado pelo desvio de obstáculo
-     * frontal (LIDAR/depth) e recusa o avanço mesmo em espaço livre. Usamos então o
-     * primitivo NATIVO do RobotSDK CSJBot (`Robot.moveForward()` → `move(0)`), que
-     * é o teleop do fabricante e não passa por essa camada. Se o caminho nativo não
-     * estiver disponível, cai no Slamware. RÉ/GIROS seguem no Slamware (funcionam).
+     * Verificado no bytecode do fabricante (SlamAction): o teleop oficial usa
+     * exatamente `platform.moveBy(direção)` — inclusive para FRENTE. Então a
+     * recusa do avanço vem do FIRMWARE (segurança/sensor), não do comando.
+     * Antes de reemitir a FRENTE, lemos o status/motivo da ação anterior
+     * (ActionStatus.BLOCKED + reason) para o firmware nos dizer o porquê —
+     * mostrado em "Último comando" na tela.
      */
     private fun drive(dir: SlamwareChassis.Dir) {
-        if (dir == SlamwareChassis.Dir.FORWARD) {
-            if (motionSdk?.moverNativo(dir) == true) return
+        if (dir == SlamwareChassis.Dir.FORWARD && lastDir == SlamwareChassis.Dir.FORWARD) {
+            chassis.lastActionStatus().takeIf { it.isNotEmpty() }?.let { st ->
+                lastCommandLabel = "frente → $st"
+            }
         }
         chassis.moveBy(dir)
+        // Extra inofensivo: primitivo nativo CSJBot (se o transporte NG existir no robô).
+        if (dir == SlamwareChassis.Dir.FORWARD) motionSdk?.moverNativo(dir)
     }
 
     private fun stopDrive() {
