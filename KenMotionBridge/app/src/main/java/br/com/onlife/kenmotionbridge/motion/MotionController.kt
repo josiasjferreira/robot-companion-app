@@ -58,6 +58,15 @@ class MotionController(
                 lastCommandAt = System.currentTimeMillis()
             }
             "stop" -> stop()
+            // SCANNER de direção: {"type":"moveby_raw","direction":N} envia o código
+            // cru ao firmware (descobre a tabela real de direções do chassi).
+            "moveby_raw" -> {
+                val d = json.optInt("direction", -1)
+                val res = chassis.moveByRaw(d)
+                lastCommandLabel = "moveby_raw d=$d → $res"
+                lastCommandAt = System.currentTimeMillis()
+                Log.i(TAG, lastCommandLabel)
+            }
             "chassis" -> handleChassis(json)
             else -> Log.w(TAG, "Tipo de comando desconhecido: $raw")
         }

@@ -379,6 +379,43 @@ class SlamwareChassis(
     /** Última ação de movimento (IMoveAction) para permitir cancelamento. */
     @Volatile private var lastAction: Any? = null
 
+    /** Última ação de FRENTE (status persiste na tela mesmo após stop/outras direções). */
+    @Volatile private var lastForwardAction: Any? = null
+
+    /** Status/motivo da última tentativa de FRENTE — não é apagado por stop/ré/giros. */
+    fun lastForwardStatus(): String {
+        val a = lastForwardAction ?: return ""
+        val st = runCatching { a.javaClass.getMethod("getStatus").invoke(a)?.toString() }.getOrNull().orEmpty()
+        val rs = runCatching { a.javaClass.getMethod("getReason").invoke(a)?.toString() }.getOrNull().orEmpty()
+        return listOf(st, rs).filter { it.isNotEmpty() && it != "null" }.joinToString(" · ")
+    }
+
+    /**
+     * SCANNER de direção: envia move_by com o CÓDIGO CRU [direction] (0..N) direto ao
+     * firmware, contornando o enum. Descobre empiricamente a tabela de direções do
+     * chassi (a ordem do enum BACKWARD=0/FORWARD=1 pode divergir da tabela do firmware —
+     * no comando NAVI nativo, 0=frente). Constrói MoveByReqBean e invoca o
+     * CsjSlamCore.buildAndSendMsg privado por reflexão.
+     */
+    fun moveByRaw(direction: Int): String {
+        val p = platform ?: return "sem plataforma"
+        return try {
+            val beanCls = Class.forName("com.slamtec.slamware.core.entity.request.MoveByReqBean")
+            val bean = beanCls.getDeclaredConstructor().newInstance()
+            beanCls.getMethod("setDirection", Int::class.javaPrimitiveType).invoke(bean, direction)
+            val sdpCls = Class.forName("com.slamtec.slamware.sdp.SlamwareSdpPlatform")
+            val coreField = sdpCls.getDeclaredField("core").apply { isAccessible = true }
+            val core = coreField.get(null) ?: return "core nulo"
+            val send = core.javaClass.getDeclaredMethod(
+                "buildAndSendMsg", Class.forName("com.slamtec.slamware.core.entity.BaseReqBean")
+            ).apply { isAccessible = true }
+            send.invoke(core, bean)
+            "enviado d=$direction"
+        } catch (t: Throwable) {
+            "falhou: ${t.cause?.message ?: t.message}"
+        }
+    }
+
     /** Status/motivo da última ação moveBy — na voz do firmware (ex.: BLOCKED · reason). */
     fun lastActionStatus(): String {
         val a = lastAction ?: return ""
@@ -419,6 +456,7 @@ class SlamwareChassis(
             // MoveDirection.valueOf("FORWARD" | "BACKWARD" | "TURN_LEFT" | "TURN_RIGHT")
             val enumVal = moveDirCls.getMethod("valueOf", String::class.java).invoke(null, dir.name)
             lastAction = p.javaClass.getMethod("moveBy", moveDirCls).invoke(p, enumVal)
+            if (dir == Dir.FORWARD) lastForwardAction = lastAction
             Log.i(TAG, "moveBy(${dir.name}) enviado ao chassi")
             true
         } catch (t: Throwable) {

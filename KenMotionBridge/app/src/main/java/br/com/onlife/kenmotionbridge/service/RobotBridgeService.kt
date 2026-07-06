@@ -277,8 +277,10 @@ class RobotBridgeService : Service() {
         // ação moveBy (ex.: BLOCKED · reason) — anexadas ao diag da tela a cada ~3 s.
         if (online && baseNetDiag.isNotEmpty() && ++healthTickCount % 3 == 0) {
             val health = chassis.healthSummary()
+            val fwd = chassis.lastForwardStatus()
             val action = chassis.lastActionStatus()
             val extra = "\n→ saúde chassi: " + health +
+                (if (fwd.isNotEmpty()) "\n→ última FRENTE: " + fwd else "") +
                 (if (action.isNotEmpty()) "\n→ última ação: " + action else "")
             StatusBus.update { it.copy(netInfo = baseNetDiag + extra) }
         }
