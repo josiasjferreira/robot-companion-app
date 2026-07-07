@@ -136,6 +136,8 @@ class RobotBridgeService : Service() {
         scope.launch {
             applyChassisRouting()
             chassis.connect()
+            // Replica o "despertar" do stack do fabricante (wakeUp + estados idle).
+            if (chassis.connected) Log.i(TAG, "Ativação: " + chassis.autoActivate())
             motionSdk.inicializarConexaoRobo()
         }
     }
@@ -277,10 +279,12 @@ class RobotBridgeService : Service() {
         // ação moveBy (ex.: BLOCKED · reason) — anexadas ao diag da tela a cada ~3 s.
         if (online && baseNetDiag.isNotEmpty() && ++healthTickCount % 3 == 0) {
             val health = chassis.healthSummary()
+            val mode = chassis.modeSummary()
             val depth = chassis.frontDepthSummary()
             val fwd = chassis.lastForwardStatus()
             val action = chassis.lastActionStatus()
             val extra = "\n→ saúde chassi: " + health +
+                (if (mode.isNotEmpty()) "\n→ modo: " + mode else "") +
                 (if (depth.isNotEmpty()) "\n→ " + depth else "") +
                 (if (fwd.isNotEmpty()) "\n→ última FRENTE: " + fwd else "") +
                 (if (action.isNotEmpty()) "\n→ última ação: " + action else "")

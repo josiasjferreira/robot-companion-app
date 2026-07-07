@@ -463,6 +463,67 @@ class SlamwareChassis(
         st.toString()
     }.getOrDefault("")
 
+    /**
+     * MODO do chassi — o provável portão da FRENTE: sem mapa/localização, firmwares
+     * de delivery liberam ré/giros (manobra segura) mas vetam avanço.
+     * Lê workMode, mappingMode, localização, moveStates e naviReady.
+     */
+    fun modeSummary(): String {
+        val p = platform ?: return ""
+        fun g(name: String): String = runCatching {
+            p.javaClass.getMethod(name).invoke(p)?.toString() ?: "null"
+        }.getOrElse { "?" }
+        return "work=" + g("getWorkMode") +
+            " · naviReady=" + g("isNaviReady") +
+            " · moveStates=" + g("getCurrentMoveStates") +
+            " · mapLoc=" + g("getMapLocalization") +
+            " · mapUpd=" + g("getMapUpdate") +
+            " · buildMap=" + g("isBuidlMap")
+    }
+
+    /**
+     * ATIVADOR do chassi — as alavancas do stack do fabricante, acionáveis por MQTT
+     * ({"type":"chassis_ctl","action":"..."}). Ações seguras e reversíveis.
+     */
+    fun chassisCtl(action: String): String {
+        val p = platform ?: return "sem plataforma"
+        fun call(name: String): String = runCatching {
+            p.javaClass.getMethod(name).invoke(p); "$name OK"
+        }.getOrElse { "$name: ${it.cause?.message ?: it.message}" }
+        fun callBool(name: String, v: Boolean): String = runCatching {
+            p.javaClass.getMethod(name, Boolean::class.javaPrimitiveType).invoke(p, v); "$name($v) OK"
+        }.getOrElse { "$name: ${it.cause?.message ?: it.message}" }
+        return when (action) {
+            "wakeup" -> call("wakeUp")
+            "idle" -> call("moveStatesIdel") + " | " + call("setErrorMsgIdelStates")
+            "navi_mode", "build_mode" -> runCatching {
+                val wmCls = Class.forName("com.slamtec.slamware.robot.WorkMode")
+                val mode = wmCls.getMethod("valueOf", String::class.java)
+                    .invoke(null, if (action == "navi_mode") "MODE_NAVIGATION" else "MODE_BUILD_MAP")
+                p.javaClass.getMethod("switchWorkMode", wmCls).invoke(p, mode)
+                "switchWorkMode($action) OK"
+            }.getOrElse { "switchWorkMode: ${it.cause?.message ?: it.message}" }
+            "begin_map" -> call("beginBuildMap")
+            "loc_on" -> callBool("setMapLocalization", true)
+            "loc_off" -> callBool("setMapLocalization", false)
+            "upd_on" -> callBool("setMapUpdate", true)
+            "upd_off" -> callBool("setMapUpdate", false)
+            "maps" -> runCatching {
+                val list = p.javaClass.getMethod("requireMapList").invoke(p) as? List<*>
+                "mapas: " + (list?.joinToString(", ") { it.toString() } ?: "nenhum")
+            }.getOrElse { "requireMapList: ${it.cause?.message ?: it.message}" }
+            else -> "ação desconhecida: $action (use wakeup|idle|navi_mode|build_mode|begin_map|loc_on|loc_off|upd_on|upd_off|maps)"
+        }
+    }
+
+    /** Ativação AUTOMÁTICA segura pós-conexão (replica o despertar do stack do fabricante). */
+    fun autoActivate(): String {
+        val r1 = chassisCtl("wakeup")
+        val r2 = chassisCtl("idle")
+        Log.i(TAG, "autoActivate: $r1 | $r2")
+        return "$r1 | $r2"
+    }
+
     /** Saúde do chassi na voz do firmware (E-stop, LIDAR, câmera de profundidade, erros). */
     fun healthSummary(): String {
         val p = platform ?: return "sem plataforma"
