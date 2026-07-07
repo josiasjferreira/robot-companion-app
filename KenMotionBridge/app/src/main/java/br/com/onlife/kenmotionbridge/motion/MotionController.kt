@@ -67,6 +67,20 @@ class MotionController(
                 lastCommandAt = System.currentTimeMillis()
                 Log.i(TAG, lastCommandLabel)
             }
+            // TESTE isolado do avanço cego: {"type":"track_forward","dist":0.6}
+            "track_forward" -> {
+                val dist = json.optDouble("dist", 0.6).toFloat()
+                val res = chassis.trackForward(dist)
+                lastCommandLabel = "track_forward ${dist}m → $res"
+                lastCommandAt = System.currentTimeMillis()
+                Log.i(TAG, lastCommandLabel)
+            }
+            // Alterna a estratégia da frente do joystick: {"type":"forward_mode","mode":"track|oa"}
+            "forward_mode" -> {
+                forwardMode = if (json.optString("mode") == "oa") ForwardMode.OA else ForwardMode.TRACK
+                lastCommandLabel = "forward_mode = $forwardMode"
+                lastCommandAt = System.currentTimeMillis()
+            }
             "chassis" -> handleChassis(json)
             // ATIVADOR do chassi: alavancas do stack do fabricante (wakeup, modos, mapa).
             // {"type":"chassis_ctl","action":"wakeup|idle|navi_mode|build_mode|begin_map|loc_on|loc_off|upd_on|upd_off|maps"}
@@ -212,15 +226,29 @@ class MotionController(
      * mostrado em "Último comando" na tela.
      */
     private fun drive(dir: SlamwareChassis.Dir) {
-        if (dir == SlamwareChassis.Dir.FORWARD && lastDir == SlamwareChassis.Dir.FORWARD) {
+        if (dir == SlamwareChassis.Dir.FORWARD) {
+            // A FRENTE via moveBy(FORWARD) trava em WAITING_FOR_START (desvio de
+            // obstáculo esperando a câmera, que está sem leitura). Usamos o AVANÇO
+            // CEGO por odometria (moveTo + MoveTypeTrack), que NÃO espera sensor.
+            // Reemite um alvo curto à frente a cada ~0,5 s enquanto o joystick segura.
+            if (forwardMode == ForwardMode.TRACK) {
+                val res = chassis.trackForward(0.5f)
+                lastCommandLabel = "frente(track) → $res"
+                return
+            }
             chassis.lastActionStatus().takeIf { it.isNotEmpty() }?.let { st ->
                 lastCommandLabel = "frente → $st"
             }
+            chassis.moveBy(dir)
+            motionSdk?.moverNativo(dir)
+            return
         }
         chassis.moveBy(dir)
-        // Extra inofensivo: primitivo nativo CSJBot (se o transporte NG existir no robô).
-        if (dir == SlamwareChassis.Dir.FORWARD) motionSdk?.moverNativo(dir)
     }
+
+    /** Estratégia de avanço: TRACK (odometria cega, contorna o desvio) ou OA (moveBy padrão). */
+    enum class ForwardMode { TRACK, OA }
+    @Volatile var forwardMode: ForwardMode = ForwardMode.TRACK
 
     private fun stopDrive() {
         if (lastDir == null) return

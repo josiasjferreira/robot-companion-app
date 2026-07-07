@@ -580,6 +580,43 @@ class SlamwareChassis(
     }
 
     /** Cancela o movimento em andamento (IMoveAction.cancel) e tenta cancelAction no platform. */
+    /**
+     * AVANÇO CEGO por odometria — contorna o desvio de obstáculo frontal que trava a
+     * FRENTE em WAITING_FOR_START (câmera sem leitura / navegação não pronta).
+     *
+     * Usa moveTo(Location à frente, MoveOption com MoveType=MoveTypeTrack, yaw=0). O modo
+     * TRACK é rastreamento puro por odometria — NÃO espera liberação de sensor/navegação,
+     * ao contrário do moveBy(FORWARD) que é OA. [distM] em metros à frente do robô.
+     * @return status/erro para a tela.
+     */
+    fun trackForward(distM: Float = 0.6f): String {
+        val p = platform ?: return "sem plataforma"
+        return try {
+            val locCls = Class.forName("com.slamtec.slamware.robot.Location")
+            // Sem localização, o frame do mapa = frame de odometria com origem no robô;
+            // (distM, 0) = distM metros à frente. (x, y, z)
+            val loc = locCls.getConstructor(
+                Float::class.javaPrimitiveType, Float::class.javaPrimitiveType, Float::class.javaPrimitiveType
+            ).newInstance(distM, 0f, 0f)
+
+            val optCls = Class.forName("com.slamtec.slamware.robot.MoveOption")
+            val opt = optCls.getDeclaredConstructor().newInstance()
+            val mtCls = Class.forName("com.slamtec.slamware.robot.MoveOption\$MoveType")
+            val track = mtCls.getMethod("valueOf", String::class.java).invoke(null, "MoveTypeTrack")
+            optCls.getMethod("setMoveType", mtCls).invoke(opt, track)
+
+            lastAction = p.javaClass.getMethod("moveTo", locCls, optCls, Float::class.javaPrimitiveType)
+                .invoke(p, loc, opt, 0f)
+            lastForwardAction = lastAction
+            Log.i(TAG, "trackForward($distM m) via moveTo(MoveTypeTrack)")
+            "moveTo TRACK ${distM}m enviado"
+        } catch (t: Throwable) {
+            val msg = t.cause?.message ?: t.message
+            warnOnce("trackForward", t)
+            "falhou: $msg"
+        }
+    }
+
     fun cancelAction() {
         lastAction?.let { act -> runCatching { act.javaClass.getMethod("cancel").invoke(act) } }
         lastAction = null
