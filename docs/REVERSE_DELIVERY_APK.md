@@ -132,3 +132,43 @@ versões ≥ 2.6 expõe controle de **velocidade em tempo real**. Baixar esse AA
 colocar em `KenMotionBridge/app/libs/` e usar o push de velocidade é o caminho
 mais limpo e suportado para o "modo cego" — sem engenharia reversa de um APK de
 terceiros.
+
+---
+
+## 6. Confirmação pelo AndroidManifest (upload decompilado de 08/07)
+
+Lido o `AndroidManifest.xml` do decompilado enviado (pasta Drive). É o app
+**`com.csjbot.robotsdk.ten`**, `i18n_2.4.0` — o **RobotSDK** (o mesmo que já
+analisamos), NÃO o Delivery. Evidências extraídas do manifest:
+
+- Serviços do stack: `com.csjbot.robotsdk.service.RobotSdkService`,
+  **`com.csjbot.coshandler.service.CameraService`** (dirige a câmera),
+  `HandlerMsgService`, `com.aidlagent.AIDLClientService`.
+- Atividade **`com.csjbot.cosclientng.test_ui.SerialPortTestAcitivity`** →
+  confirma que o `cosclientng` fala com o chassi por **PORTA SERIAL** (o
+  transporte NG que a nossa ponte não alcança).
+- Permissões/recursos: `android.hardware.usb.host`, `USB_DEVICE_ATTACHED`,
+  `android.hardware.camera`, `camera.front` → **a câmera de profundidade é um
+  dispositivo USB**, transmitido pelo `CameraService` do app do fabricante.
+- `lib/armeabi-v7a`: libzstd-jni, libmmkv, libssl, Microsoft Speech, ffavc —
+  **nenhuma** `.so` de motor/velocidade; motion é 100% via protocolo (não nativo).
+
+**Conclusão reforçada:** a percepção frontal (`depth`) é alimentada pelo
+**`CameraService` (USB) do app do fabricante**. Sem esse app rodando (ou com a
+câmera USB desconectada), `depth: 0 pts` e o `moveBy(FORWARD)` OA nunca libera.
+O "andar cego por velocidade" continua ausente nesta versão 2.4.0; só existe no
+Delivery V5.4.3 (mais novo) ou num Slamware SDK ≥ 2.6.
+
+### Dois caminhos concretos para FECHAR (escolher um)
+
+1. **Ligar a percepção do fabricante (frente funciona com o que já temos):**
+   instalar E manter rodando o app `com.csjbot.robotsdk.ten` (ou o `diningcar`),
+   com a **câmera USB conectada**. O `CameraService` alimenta o chassi → `depth`
+   ganha pontos → `moveBy(FORWARD)` libera → a frente anda pelo joystick atual.
+   (É a via suportada; não é "cego", mas é a que o hardware exige.)
+
+2. **Modo cego real (velocidade bruta):** obter o SDK Slamware mais novo com push
+   de velocidade — extrair `com/slamtec/slamware` do **Delivery_i18n_amy_V5.4.3**
+   (procurar `setRealtimeVelocity`/RTV) OU baixar o **Slamware Android SDK 4.x**
+   oficial. Dropar o AAR em `app/libs/` e implementar `blindDrive(v,w)` com esse
+   método. (Atende ao requisito de andar sem câmera/mapa.)
