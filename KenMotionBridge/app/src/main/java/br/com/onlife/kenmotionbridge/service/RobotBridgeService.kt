@@ -286,10 +286,12 @@ class RobotBridgeService : Service() {
             val health = chassis.healthSummary()
             val mode = chassis.modeSummary()
             val depth = chassis.frontDepthSummary()
+            val lidar = chassis.laserSummary()
             val fwd = chassis.lastForwardStatus()
             val action = chassis.lastActionStatus()
             val extra = "\n→ saúde chassi: " + health +
                 (if (mode.isNotEmpty()) "\n→ modo: " + mode else "") +
+                (if (lidar.isNotEmpty()) "\n→ " + lidar else "") +
                 (if (depth.isNotEmpty()) "\n→ " + depth else "") +
                 (if (fwd.isNotEmpty()) "\n→ última FRENTE: " + fwd else "") +
                 (if (action.isNotEmpty()) "\n→ última ação: " + action else "")
