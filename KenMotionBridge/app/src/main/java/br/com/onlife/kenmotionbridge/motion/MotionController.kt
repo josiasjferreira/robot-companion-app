@@ -81,6 +81,16 @@ class MotionController(
                 lastCommandLabel = "forward_mode = $forwardMode"
                 lastCommandAt = System.currentTimeMillis()
             }
+            // Parametro de sistema do chassi (evidencia RoboStudio JobSpeed):
+            // {"type":"sys_param","key":"max_linear_vel","value":"0.6"}  (get se sem value)
+            "sys_param" -> {
+                val key = json.optString("key")
+                val res = if (json.has("value")) chassis.setSystemParam(key, json.optString("value"))
+                          else "$key = " + chassis.getSystemParam(key)
+                lastCommandLabel = "sys_param $res"
+                lastCommandAt = System.currentTimeMillis()
+                Log.i(TAG, lastCommandLabel)
+            }
             "chassis" -> handleChassis(json)
             // ATIVADOR do chassi: alavancas do stack do fabricante (wakeup, modos, mapa).
             // {"type":"chassis_ctl","action":"wakeup|idle|navi_mode|build_mode|begin_map|loc_on|loc_off|upd_on|upd_off|maps"}

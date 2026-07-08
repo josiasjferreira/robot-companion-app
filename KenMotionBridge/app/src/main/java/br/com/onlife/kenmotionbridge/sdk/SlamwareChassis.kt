@@ -516,6 +516,25 @@ class SlamwareChassis(
         }
     }
 
+    /**
+     * setSystemParameter(chave, valor) — canal de configuração do chassi.
+     * Evidência: RoboStudio (RPSlamwareSdpAgent$JobSpeed) ajusta a velocidade com
+     * `setSystemParameter("max_linear_vel", valor)`. Método idêntico ao que usamos.
+     */
+    fun setSystemParam(key: String, value: String): String {
+        val p = platform ?: return "sem plataforma"
+        return runCatching {
+            p.javaClass.getMethod("setSystemParameter", String::class.java, String::class.java)
+                .invoke(p, key, value)
+            "setSystemParameter($key=$value) OK"
+        }.getOrElse { "falhou: ${it.cause?.message ?: it.message}" }
+    }
+
+    fun getSystemParam(key: String): String = runCatching {
+        val p = platform ?: return "sem plataforma"
+        (p.javaClass.getMethod("getSystemParameter", String::class.java).invoke(p, key) ?: "null").toString()
+    }.getOrElse { "erro: ${it.cause?.message ?: it.message}" }
+
     /** Ativação AUTOMÁTICA segura pós-conexão (replica o despertar do stack do fabricante). */
     fun autoActivate(): String {
         val r1 = chassisCtl("wakeup")

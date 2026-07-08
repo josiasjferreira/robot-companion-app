@@ -172,3 +172,53 @@ Delivery V5.4.3 (mais novo) ou num Slamware SDK ≥ 2.6.
    (procurar `setRealtimeVelocity`/RTV) OU baixar o **Slamware Android SDK 4.x**
    oficial. Dropar o AAR em `app/libs/` e implementar `blindDrive(v,w)` com esse
    método. (Atende ao requisito de andar sem câmera/mapa.)
+
+---
+
+## 7. RoboStudio APK totalmente desmontado (baksmali) — VEREDITO FINAL
+
+Analisado o **`robot_studio.apk`** (`com.csjbot.robotstation`, SDK Slamware
+embutido `v1.0.8` code 0x24) — a ferramenta OFICIAL da Slamtec que dirige o robô
+manualmente. Desmontagem completa com baksmali. Toda a camada de agente é
+`com.csjbot.robotstation.agent.RPSlamwareSdpAgent$Job*`. Evidência direta:
+
+| Ação do RoboStudio | Job | Chamada Slamware REAL (smali) |
+| --- | --- | --- |
+| Joystick manual (frente/ré/giro) | `JobMoveBy` | `AbstractSlamwarePlatform.moveBy(MoveDirection)` — **IDÊNTICO ao nosso** |
+| Ajuste de velocidade | `JobSpeed` | `setSystemParameter("max_linear_vel", valor)` |
+| Ir a ponto | `JobMoveTo` | `moveTo(Location, MoveOption{setMoveType}, yaw)` — mesmo do nosso trackForward |
+| Ler velocidade | `JobRealTimeVelocity` | `getRealTimeVelocity()` — **somente leitura** |
+
+Confirmado por varredura de TODOS os `Job*` (43 jobs) e de todo o app:
+- **NÃO existe** job/método de escrita de velocidade, `setVelocity`, `manualControl`,
+  `blindMove`, `deadReckoning` nem qualquer flag de "desliga OA". O único
+  `setSystemParameter` do app inteiro usa a chave **`max_linear_vel`** (velocidade).
+- `SlamwareCorePlatform.moveBy(float, MoveOption)` (distância) existe mas lança
+  **`UnsupportedCommandException`** / cai em `moveBy(MoveDirection)` — o firmware
+  não suporta avanço por distância cega.
+
+### Veredito (com prova em 3 artefatos: RobotSDK jar, RobotSDK manifest, RoboStudio)
+
+**O "andar cego por velocidade" NÃO existe no toolchain Slamtec/CSJBot.** A
+ferramenta oficial (RoboStudio) e o app do robô (RobotSDK) dirigem a frente com
+**exatamente `moveBy(MoveDirection.FORWARD)`** — a mesma chamada da nossa ponte.
+Portanto:
+- Nosso software está **correto** (idêntico ao das ferramentas do fabricante).
+- A recusa da frente é do **firmware do chassi**: o `moveBy(FORWARD)` é OA e exige
+  a percepção frontal (câmera de profundidade) ativa. RoboStudio consegue avançar
+  **porque roda com a percepção viva**; nós vemos `depth: 0 pts` (câmera não
+  alimentada) → `WAITING_FOR_START` eterno.
+
+### Único caminho REAL para a frente
+
+Alimentar a percepção frontal — rodar o `CameraService` do fabricante
+(app `com.csjbot.robotsdk.ten`) **com a câmera de profundidade USB conectada**,
+OU carregar um mapa + localizar (para `moveTo` funcionar). Não há atalho de
+software na nossa ponte que contorne isso, porque o próprio fabricante não tem.
+
+### O que foi incorporado à ponte (útil e rastreável)
+
+- `setSystemParam(key,value)` / `getSystemParam(key)` por MQTT
+  (`{"type":"sys_param","key":"max_linear_vel","value":"0.6"}`) — replicado do
+  `RPSlamwareSdpAgent$JobSpeed` do RoboStudio. Permite ajustar/consultar a
+  velocidade e outros parâmetros do chassi.
