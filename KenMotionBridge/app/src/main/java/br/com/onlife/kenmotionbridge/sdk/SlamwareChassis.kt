@@ -425,6 +425,21 @@ class SlamwareChassis(
     }
 
     /**
+     * Resumo do LIDAR (getLaserScan) — o sensor PRIMÁRIO do SLAM. 0 pontos = a
+     * percepção do chassi está morta (sem mapa/localização → frente nunca libera,
+     * Rota A inviável = hardware); N pontos = o LIDAR gira e mapear é possível.
+     */
+    fun laserSummary(): String {
+        val p = platform ?: return ""
+        return try {
+            val scan = p.javaClass.getMethod("getLaserScan").invoke(p) ?: return "lidar: n/d"
+            val pts = scan.javaClass.getMethod("getLaserPoints").invoke(scan) as? List<*>
+            "lidar: ${pts?.size ?: 0} pts"
+        } catch (e: NoSuchMethodException) { "lidar: API ausente" }
+        catch (t: Throwable) { "lidar: erro ${t.cause?.message ?: t.message}" }
+    }
+
+    /**
      * Resumo da câmera de profundidade frontal (RGBD) — a que alimenta o desvio de
      * obstáculo que bloqueia a FRENTE. Mostra nº de pontos e a menor distância à
      * frente. Se houver um "obstáculo fantasma" perto (câmera descalibrada/suja),
