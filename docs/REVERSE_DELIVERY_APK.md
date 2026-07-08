@@ -222,3 +222,27 @@ software na nossa ponte que contorne isso, porque o próprio fabricante não tem
   (`{"type":"sys_param","key":"max_linear_vel","value":"0.6"}`) — replicado do
   `RPSlamwareSdpAgent$JobSpeed` do RoboStudio. Permite ajustar/consultar a
   velocidade e outros parâmetros do chassi.
+
+---
+
+## 8. slamware_sdk_android.jar OFICIAL (v2.0.4, 2022) — 4ª confirmação
+
+Baixado e analisado (javap) o `slamware_sdk_android.jar` do Drive: é o **SDK
+Slamware Android OFICIAL, `VERSION_NAME=2.0.4`** (mais ANTIGO que o 2.4.0 do
+robô). Resultado:
+
+- **Nenhuma** API de velocidade bruta (`setVelocity`/`RealTimeVelocity` write) —
+  em NENHUMA classe. Confirma pela 4ª vez que "andar cego por velocidade" não
+  existe no toolchain Slamware.
+- `MoveOption` (mais rico que o do fork CSJBot) tem `setTrackWithOA(boolean)`,
+  `setNoSmooth`, `setKeyPoints`, `setMilestone`, `setPrecise`, `setSpeedRatio`,
+  `setFailRetryCount`. **PORÉM** o primitivo por distância `moveBy(float,
+  MoveOption)` NÃO é suportado pelo firmware do CT300 (no SDK 2.4.0 do robô o
+  `SlamwareSdpPlatform` só implementa `moveBy(MoveDirection)`; no RoboStudio o
+  `moveBy(float,MoveOption)` lança `UnsupportedCommandException`).
+
+**Conclusão:** este jar oficial não altera a situação — é mais antigo e sem
+velocidade. Reforça o veredito da seção 7: a frente do CT300 só é liberada com a
+**percepção frontal alimentada** (câmera de profundidade) ou **mapa+localização**.
+Nenhum SDK Slamware (2.0.4 oficial, 2.4.0 do robô, v1.0.8 do RoboStudio) expõe
+teleop por velocidade que contorne o obstacle-avoidance frontal deste firmware.
