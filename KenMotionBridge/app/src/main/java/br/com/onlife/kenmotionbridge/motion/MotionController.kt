@@ -27,7 +27,16 @@ class MotionController(
     /** Camada central de movimento do chassi (RobotSDK). Opcional p/ não quebrar testes. */
     private val motionSdk: KenMotionSdk? = null,
 ) {
-    companion object { private const val TAG = "MotionController" }
+    companion object {
+        private const val TAG = "MotionController"
+        /** Teto de segurança do modo cego (m/s), configurável. */
+        private const val V_MAX_BLIND = 0.35
+    }
+
+    /** Fim da janela do watchdog do modo cego (300 ms). 0 = modo cego inativo. */
+    @Volatile private var blindUntil = 0L
+    /** Modo cego ativo agora? (para o feedback blind_mode). */
+    fun blindActiveNow() = System.currentTimeMillis() < blindUntil
 
     // Alvos vindos do joystick (já normalizados, antes da rampa).
     @Volatile private var targetV = 0.0
@@ -58,6 +67,23 @@ class MotionController(
                 lastCommandAt = System.currentTimeMillis()
             }
             "stop" -> stop()
+            // MODO CEGO (web /admin/movimento): {"type":"blind_move","dx":0,"dy":0.6,"speed":40}
+            // dx forçado a 0 (sem giro), dy só para frente (ignora negativo). Roteia pelo
+            // caminho de FRENTE em modo TRACK (odometria, sem OA). ATENÇÃO: não existe API
+            // de "velocidade bruta" neste SDK (provado em 5 binários — ver
+            // docs/REVERSE_DELIVERY_APK.md); o avanço ainda depende do firmware liberar.
+            "blind_move" -> {
+                val dy = clamp(json.optDouble("dy", 0.0), -1.0, 1.0)
+                if (dy <= 0.0) { stop(); return }         // só frente; ré/parado -> para
+                val speed = clamp(json.optDouble("speed", 0.0), 0.0, 100.0) / 100.0
+                forwardMode = ForwardMode.TRACK           // odometria, sem OA
+                targetV = dy * V_MAX_BLIND * speed        // dx ignorado (sem rotação)
+                targetW = 0.0
+                val now = System.currentTimeMillis()
+                lastCommandAt = now
+                blindUntil = now + 300L                   // watchdog dedicado de 300 ms
+                lastCommandLabel = "blind_move dy=%.2f s=%d → v=%.2f".format(dy, (speed*100).toInt(), targetV)
+            }
             // SCANNER de direção: {"type":"moveby_raw","direction":N} envia o código
             // cru ao firmware (descobre a tabela real de direções do chassi).
             "moveby_raw" -> {
@@ -146,6 +172,7 @@ class MotionController(
     fun stop() {
         targetV = 0.0; targetW = 0.0
         currentV = 0.0; currentW = 0.0
+        blindUntil = 0L                    // encerra o modo cego
         chassis.cancelAction()
         chassis.sendVelocity(0.0, 0.0)
         stopDrive()
@@ -160,10 +187,12 @@ class MotionController(
     fun tick(dtSec: Double) {
         val now = System.currentTimeMillis()
 
-        // Watchdog: sem comando recente -> alvo zero.
+        // Watchdog: sem comando recente -> alvo zero. No modo cego a janela é 300 ms
+        // (dead-man mais curto exigido pelo teleop cego); senão o watchdog do config.
+        val wd = if (blindUntil != 0L) 300L else config.watchdogMs
         var tv = targetV
         var tw = targetW
-        if (now - lastCommandAt > config.watchdogMs) { tv = 0.0; tw = 0.0 }
+        if (now - lastCommandAt > wd) { tv = 0.0; tw = 0.0; if (blindUntil != 0L && now > blindUntil) blindUntil = 0L }
 
         // Segurança de obstáculo frontal.
         frontCm = chassis.frontDistanceCm()

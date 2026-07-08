@@ -266,12 +266,17 @@ class RobotBridgeService : Service() {
             put("v", round3(motion.currentV))
             put("w", round3(motion.currentW))
             put("front_cm", if (tel.frontCm.isNaN()) JSONObject.NULL else round1(tel.frontCm))
+            put("blind_mode", motion.blindActiveNow())
             put("ts", now)
         }
         sendFeedback(fb.toString())
 
         if (online) {
-            val tj = chassis.telemetryJson().apply { put("ts", now) }
+            val tj = chassis.telemetryJson().apply {
+                put("ts", now)
+                // No modo cego: sinaliza OA desligado e localização indisponível (web mostra —).
+                if (motion.blindActiveNow()) { put("obstacle_avoidance", false); put("localization", JSONObject.NULL) }
+            }
             sendTelemetry(tj.toString())
         }
 
