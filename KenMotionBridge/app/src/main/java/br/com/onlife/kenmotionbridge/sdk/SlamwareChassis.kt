@@ -561,6 +561,20 @@ class SlamwareChassis(
                 "switchWorkMode($action) OK"
             }.getOrElse { "switchWorkMode: ${it.cause?.message ?: it.message}" }
             "begin_map" -> call("beginBuildMap")
+            // Alavancas de RECUPERAÇÃO que o app oficial (RoboStudio 1.0.25) expõe e
+            // nós não tínhamos — assinaturas confirmadas por javap:
+            "continue_map" -> call("startContinueBuildMap")   // "Continue drawing" do vídeo
+            "clear_health" -> runCatching {                    // limpa latches de erro presos
+                p.javaClass.getMethod("clearRobotHealth", Int::class.javaPrimitiveType).invoke(p, 0)
+                "clearRobotHealth(0) OK"
+            }.getOrElse { "clearRobotHealth: ${it.cause?.message ?: it.message}" }
+            "rgbd_calib" -> runCatching {                      // recalibra a câmera de profundidade
+                p.javaClass.getMethod("startRGBDParamCalibration").invoke(p)
+                val st = runCatching {
+                    p.javaClass.getMethod("getRGBDParamCalibrationState").invoke(p)?.toString()
+                }.getOrNull()
+                "startRGBDParamCalibration OK · estado=$st"
+            }.getOrElse { "startRGBDParamCalibration: ${it.cause?.message ?: it.message}" }
             "loc_on" -> callBool("setMapLocalization", true)
             "loc_off" -> callBool("setMapLocalization", false)
             "upd_on" -> callBool("setMapUpdate", true)
@@ -569,7 +583,7 @@ class SlamwareChassis(
                 val list = p.javaClass.getMethod("requireMapList").invoke(p) as? List<*>
                 "mapas: " + (list?.joinToString(", ") { it.toString() } ?: "nenhum")
             }.getOrElse { "requireMapList: ${it.cause?.message ?: it.message}" }
-            else -> "ação desconhecida: $action (use rebind|wakeup|idle|navi_mode|build_mode|begin_map|loc_on|loc_off|upd_on|upd_off|maps)"
+            else -> "ação desconhecida: $action (use rebind|wakeup|idle|navi_mode|build_mode|begin_map|continue_map|clear_health|rgbd_calib|loc_on|loc_off|upd_on|upd_off|maps)"
         }
     }
 
