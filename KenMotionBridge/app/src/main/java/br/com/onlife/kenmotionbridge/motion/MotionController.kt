@@ -175,10 +175,12 @@ class MotionController(
         val speed = json.optDouble("speed", KenMotionSdk.VELOCIDADE_PADRAO.toDouble()).toFloat()
         val angle = if (json.has("angle")) json.optInt("angle") else null
         val durationMs = if (json.has("durationMs")) json.optLong("durationMs") else null
-        lastCommandLabel = "chassis $action${angle?.let { " ${it}°" } ?: ""}"
+        // "dist" (metros) vira duração no KenMotionSdk (t = d/v; firmware não anda por distância).
+        val dist = if (json.has("dist")) json.optDouble("dist").toFloat() else null
+        lastCommandLabel = "chassis $action${angle?.let { " ${it}°" } ?: ""}${dist?.let { " ${it}m" } ?: ""}"
         lastCommandAt = System.currentTimeMillis()
         when (action) {
-            "frente" -> sdk.moverFrente(speed, durationMs)
+            "frente" -> if (dist != null) sdk.moveForward(dist, speed) else sdk.moverFrente(speed, durationMs)
             "tras" -> sdk.moverTras(speed, durationMs)
             "esquerda" -> sdk.virarEsquerda(angle, speed)
             "direita" -> sdk.virarDireita(angle, speed)

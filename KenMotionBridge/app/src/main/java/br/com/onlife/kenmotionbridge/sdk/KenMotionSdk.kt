@@ -91,6 +91,25 @@ class KenMotionSdk(private val chassis: SlamwareChassis? = null) {
 
     // ── Comandos de movimento (porta de entrada única) ────────────────────────
 
+    /** Chassi apto a receber comando de movimento agora? (canal direto OU sessão CSJBot). */
+    fun isMotionAvailable(): Boolean =
+        chassis?.connected == true || (inicializado && estaConectado())
+
+    /**
+     * FRENTE com distância/velocidade configuráveis (interface de alto nível do
+     * RobotSdkMotionBridge — ver docs/STACK_FRENTE_ROBOTSDK.md). O firmware CT300
+     * não expõe "andar X metros" (moveBy(float) é ignorado; provado por teste no
+     * robô), então a distância vira DURAÇÃO (t = d/v) sobre o passo contínuo.
+     */
+    fun moveForward(distanceMeters: Float? = null, speed: Float? = null) {
+        val v = (speed ?: VELOCIDADE_PADRAO).coerceIn(0.05f, VELOCIDADE_MAX)
+        val durMs = distanceMeters?.let { d -> ((d.coerceIn(0.1f, 5f) / v) * 1000f).toLong() }
+        moverFrente(v, durMs)
+    }
+
+    /** Parada segura — cancela navegação + zera velocidades nos DOIS caminhos. */
+    fun stop() = pararMovimento()
+
     /** Move o chassi para frente. [velocidade] em m/s; se [duracaoMs] != null, para sozinho depois. */
     fun moverFrente(velocidade: Float = VELOCIDADE_PADRAO, duracaoMs: Long? = null) =
         comandoDirecional("moverFrente", "moveForward", velocidade, duracaoMs)
