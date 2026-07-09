@@ -153,8 +153,8 @@ class SlamwareChassis(
 
     /**
      * VARREDURA: procura um serviço "*RobotSdkService*" em qualquer app
-     * com.csjbot.*/com.slamtec.* instalado. Necessária porque neste tablet o app
-     * esperado (com.csjbot.robotsdk.ten) NÃO existe — só com.csjbot.diningcar.
+     * com.csjbot.* ou com.slamtec.* instalado. Necessária porque neste tablet o
+     * app esperado (com.csjbot.robotsdk.ten) NÃO existe — só com.csjbot.diningcar.
      */
     private fun scanForSdkService(): ComponentName? = runCatching {
         val pm = context.packageManager
