@@ -15,11 +15,19 @@
 
     <!-- Visibilidade de pacotes (Android 11+/targetSdk 34): permite resolver e bindar
          o serviço do RobotSDK (CSJBot) por ação/componente, mesmo estando em outro app.
-         Pacote do app do RobotSDK: com.csjbot.robotsdk.ten. -->
+         QUERY_ALL_PACKAGES: neste tablet o app do RobotSDK NÃO é o com.csjbot.robotsdk.ten
+         esperado (só com.csjbot.diningcar visto) — a ponte precisa VARRER os pacotes
+         com.csjbot.*/com.slamtec.* atrás do RobotSdkService real. Ferramenta interna
+         de operação, sem distribuição na Play Store. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <queries>
         <package android:name="com.csjbot.robotsdk.ten" />
+        <package android:name="com.csjbot.diningcar" />
         <intent>
             <action android:name="com.csjbot.robotsdkservice.startservice" />
+        </intent>
+        <intent>
+            <action android:name="com.slamtec.aidl.RobotSdkService" />
         </intent>
     </queries>
 

@@ -129,13 +129,16 @@ class SlamwareChassis(
         // Abordagem 1 (recomendada): conexão direta SlamwareCorePlatform.connect(ip, 1445).
         connectSlamware()
 
-        // Abordagem 2 (fallback): bind ao RobotSdkService só se a direta NÃO conectou.
-        if (!connected && config.useCsjbotBinding) {
-            Log.i(TAG, "Conexão direta falhou; tentando fallback de bind AIDL ao RobotSdkService")
+        // Abordagem 2 (agora SEMPRE, não só fallback): bind ao RobotSdkService em
+        // paralelo ao TCP direto. É o stack do fabricante que inicializa a PERCEPÇÃO
+        // (câmera/LIDAR) — sem o bind, lidar/depth ficam em 0 mesmo com o socket 1445
+        // aberto, e o chassis_ctl da fábrica é nulo.
+        if (config.useCsjbotBinding) {
+            if (!connected) Log.i(TAG, "Conexão direta falhou; bind AIDL vira o caminho principal")
             bindCsjbot()
             // Aguarda um pouco para o handshake AIDL completar (connectToSDKSucceed/sdkAppMsgToAar).
             Thread.sleep(500L)
-            // Se o AIDL forneceu informações do chassi, tenta conectar via Solução 2.
+            // Se o AIDL forneceu informações do chassi e a direta falhou, tenta via Solução 2.
             if (bound && !connected && !chassisInfo.isNullOrEmpty()) {
                 Log.i(TAG, "Tentando conectar via informação do SDK: $chassisInfo")
                 connectViaSdkInfo()
@@ -145,21 +148,57 @@ class SlamwareChassis(
         return connected
     }
 
-    private fun bindCsjbot() {
-        val intent = Intent(CSJBOT_BIND_ACTION)
+    /** Último componente que o bind tentou (mostrado no detail do rebind/tela). */
+    @Volatile private var lastBindTarget: String = ""
 
-        // (1) Tenta resolver o componente real a partir da AÇÃO (bind explícito é exigido no Android 5+).
-        val resolved = runCatching { context.packageManager.resolveService(intent, 0) }.getOrNull()
-        val component: ComponentName = if (resolved?.serviceInfo != null) {
-            val si = resolved.serviceInfo
-            Log.i(TAG, "RobotSdkService resolvido pela ação: ${si.packageName}/${si.name} exported=${si.exported}")
-            ComponentName(si.packageName, si.name)
-        } else {
-            // (1b) Fallback: componente EXPLÍCITO conhecido do app do RobotSDK.
-            Log.w(TAG, "Ação '$CSJBOT_BIND_ACTION' não resolvida; tentando componente explícito $CSJBOT_PKG/$CSJBOT_SERVICE")
-            ComponentName(CSJBOT_PKG, CSJBOT_SERVICE)
+    /**
+     * VARREDURA: procura um serviço "*RobotSdkService*" em qualquer app
+     * com.csjbot.*/com.slamtec.* instalado. Necessária porque neste tablet o app
+     * esperado (com.csjbot.robotsdk.ten) NÃO existe — só com.csjbot.diningcar.
+     */
+    private fun scanForSdkService(): ComponentName? = runCatching {
+        val pm = context.packageManager
+        pm.getInstalledPackages(android.content.pm.PackageManager.GET_SERVICES)
+            .asSequence()
+            .filter { it.packageName.startsWith("com.csjbot") || it.packageName.startsWith("com.slamtec") }
+            .flatMap { (it.services ?: emptyArray()).asSequence() }
+            .firstOrNull { it.name.contains("RobotSdkService", ignoreCase = true) }
+            ?.let {
+                Log.i(TAG, "RobotSdkService achado por varredura: ${it.packageName}/${it.name}")
+                ComponentName(it.packageName, it.name)
+            }
+    }.getOrNull()
+
+    private fun bindCsjbot() {
+        // (1) Ações conhecidas (variantes entre gerações do RobotSDK).
+        var actionUsed = CSJBOT_BIND_ACTION
+        var component: ComponentName? = null
+        for (a in listOf(CSJBOT_BIND_ACTION, "com.slamtec.aidl.RobotSdkService")) {
+            val si = runCatching { context.packageManager.resolveService(Intent(a), 0)?.serviceInfo }.getOrNull()
+            if (si != null) {
+                Log.i(TAG, "RobotSdkService resolvido pela ação '$a': ${si.packageName}/${si.name} exported=${si.exported}")
+                component = ComponentName(si.packageName, si.name)
+                actionUsed = a
+                break
+            }
         }
-        intent.component = component
+        // (2) Componente EXPLÍCITO conhecido, se o pacote estiver instalado.
+        if (component == null &&
+            runCatching { context.packageManager.getPackageInfo(CSJBOT_PKG, 0) }.getOrNull() != null
+        ) {
+            Log.w(TAG, "Nenhuma ação resolvida; usando componente explícito $CSJBOT_PKG/$CSJBOT_SERVICE")
+            component = ComponentName(CSJBOT_PKG, CSJBOT_SERVICE)
+        }
+        // (3) Varredura de pacotes CSJBot/Slamtec.
+        if (component == null) component = scanForSdkService()
+        if (component == null) {
+            lastBindTarget = "NENHUM (RobotSdkService não existe em com.csjbot.*/com.slamtec.*)"
+            appendError("RobotSdkService não encontrado em nenhum app instalado")
+            Log.e(TAG, lastBindTarget)
+            return
+        }
+        lastBindTarget = component.flattenToShortString()
+        val intent = Intent(actionUsed).apply { this.component = component }
 
         // (3) Sobe o serviço ANTES de bindar, para garantir que o RobotSdkService esteja rodando.
         runCatching { context.startService(intent) }
@@ -178,7 +217,7 @@ class SlamwareChassis(
             appendError("bind=false em ${component.packageName} (app do RobotSDK instalado? exportado?)")
             Log.e(TAG, "bindService retornou false para ${component.packageName}/${component.shortClassName}")
         } else {
-            if (sdkError.isEmpty()) sdkError = "aguardando handshake do RobotSdkService ($CSJBOT_PKG)…"
+            if (sdkError.isEmpty()) sdkError = "aguardando handshake do RobotSdkService (${component.packageName})…"
             Log.i(TAG, "bindService solicitado (ok=true) em ${component.packageName}/${component.shortClassName}")
         }
     }
@@ -553,7 +592,7 @@ class SlamwareChassis(
         Thread.sleep(1500L)
         report()
         val hs = if (SdkLink.handshakeOk) "handshake OK" else "SEM handshake"
-        val msg = "bind=${if (bound) "SIM" else "não"} · $hs" +
+        val msg = "bind=${if (bound) "SIM" else "não"} · $hs · alvo=$lastBindTarget" +
             (if (sdkError.isNotEmpty()) " · $sdkError" else "")
         Log.i(TAG, "rebindSdk: $msg")
         return msg
