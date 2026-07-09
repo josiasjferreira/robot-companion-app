@@ -503,6 +503,7 @@ class SlamwareChassis(
      * ({"type":"chassis_ctl","action":"..."}). Ações seguras e reversíveis.
      */
     fun chassisCtl(action: String): String {
+        if (action == "rebind") return rebindSdk()   // não exige platform (o bind é Android)
         val p = platform ?: return "sem plataforma"
         fun call(name: String): String = runCatching {
             p.javaClass.getMethod(name).invoke(p); "$name OK"
@@ -529,8 +530,33 @@ class SlamwareChassis(
                 val list = p.javaClass.getMethod("requireMapList").invoke(p) as? List<*>
                 "mapas: " + (list?.joinToString(", ") { it.toString() } ?: "nenhum")
             }.getOrElse { "requireMapList: ${it.cause?.message ?: it.message}" }
-            else -> "ação desconhecida: $action (use wakeup|idle|navi_mode|build_mode|begin_map|loc_on|loc_off|upd_on|upd_off|maps)"
+            else -> "ação desconhecida: $action (use rebind|wakeup|idle|navi_mode|build_mode|begin_map|loc_on|loc_off|upd_on|upd_off|maps)"
         }
+    }
+
+    /**
+     * FORÇA o bind AIDL ao RobotSdkService mesmo com o TCP direto conectado
+     * ({"type":"chassis_ctl","action":"rebind"}). Hoje o bind só acontece como
+     * fallback quando o TCP falha — então com o socket cru OK a ponte fica
+     * "Serviço bound: não" e o stack do fabricante (que inicializa a PERCEPÇÃO:
+     * câmera/LIDAR) nunca é acordado por nós. O detail reporta bind + handshake
+     * para dizer se o serviço existe neste tablet (só com.csjbot.diningcar visto).
+     */
+    fun rebindSdk(): String {
+        runCatching { context.unbindService(serviceConnection) }
+        sdkBinder = null
+        bound = false
+        usingAarPath = false
+        SdkLink.reset()
+        bindCsjbot()
+        // Aguarda onServiceConnected + connectToSDKSucceed (bind é assíncrono).
+        Thread.sleep(1500L)
+        report()
+        val hs = if (SdkLink.handshakeOk) "handshake OK" else "SEM handshake"
+        val msg = "bind=${if (bound) "SIM" else "não"} · $hs" +
+            (if (sdkError.isNotEmpty()) " · $sdkError" else "")
+        Log.i(TAG, "rebindSdk: $msg")
+        return msg
     }
 
     /**
@@ -610,8 +636,13 @@ class SlamwareChassis(
                 put("navi_ready", false)
                 put("has_map", false)
                 put("map_cells", 0)
+                put("lidar_pts", 0)
+                put("depth_pts", 0)
+                put("work_mode", "?")
+                put("move_states", "?")
                 put("robot_health", JSONObject().put("hasError", false).put("hasFatal", false)
                     .put("hasWarning", false).put("errors", JSONArray()))
+                put("sensors", JSONArray())
             }
         }
         // Localização normalizada 0–1 (o float do getLocalizationQuality é 0–1 nesta
@@ -644,6 +675,22 @@ class SlamwareChassis(
         }.getOrNull() ?: (loc > 0.5 && hasMap)
         out.put("navi_ready", navi)
 
+        // PERCEPÇÃO crua — o portão real da frente: sem pontos de LIDAR o SLAM não
+        // sai de WAITING_FOR_START em nenhum modo (mapa é consequência, não causa).
+        out.put("lidar_pts", runCatching {
+            val scan = p.javaClass.getMethod("getLaserScan").invoke(p)
+            (scan?.javaClass?.getMethod("getLaserPoints")?.invoke(scan) as? List<*>)?.size
+        }.getOrNull() ?: 0)
+        out.put("depth_pts", runCatching {
+            (p.javaClass.getMethod("getDepthSensorData").invoke(p) as? List<*>)?.size
+        }.getOrNull() ?: 0)
+        out.put("work_mode", runCatching {
+            p.javaClass.getMethod("getWorkMode").invoke(p)?.toString()
+        }.getOrNull() ?: "?")
+        out.put("move_states", runCatching {
+            p.javaClass.getMethod("getCurrentMoveStates").invoke(p)?.toString()
+        }.getOrNull() ?: "?")
+
         // Saúde na voz do firmware (HealthInfo: isError/isFatal/isWarning + errors[]).
         val health = JSONObject()
         runCatching {
@@ -653,6 +700,13 @@ class SlamwareChassis(
             health.put("hasError", hb("isError"))
             health.put("hasFatal", hb("isFatal"))
             health.put("hasWarning", hb("isWarning"))
+            // Flags específicas de desconexão — decidem hardware vs. software:
+            // se o firmware NÃO acusa lidar_disconnected com lidar_pts=0, a
+            // percepção existe mas não foi iniciada (ou falamos com um proxy).
+            health.put("lidar_disconnected", hb("getHasLidarDisconnected"))
+            health.put("depth_camera_disconnected", hb("getHasDepthCameraDisconnected"))
+            health.put("sdp_disconnected", hb("getHasSdpDisconnected"))
+            health.put("emergency_stop", hb("getHasSystemEmergencyStop"))
             val arr = JSONArray()
             runCatching { h?.javaClass?.getMethod("getErrors")?.invoke(h) as? List<*> }.getOrNull()
                 ?.filterNotNull()?.take(8)?.forEach { e ->
@@ -670,6 +724,31 @@ class SlamwareChassis(
             health.put("errors", JSONArray())
         }
         out.put("robot_health", health)
+
+        // Veredito POR SENSOR na voz do firmware (getSensorHealthInfoList):
+        // LIDAR_HEALTH/DEPTH_HEALTH/ODOM_HEALTH… com level/value/message. É a
+        // evidência que separa "cabo solto" (suporte CSJBot) de "não iniciado".
+        runCatching {
+            val list = p.javaClass.getMethod("getSensorHealthInfoList").invoke(p) as? List<*>
+            val sensors = JSONArray()
+            list?.filterNotNull()?.take(12)?.forEach { s ->
+                sensors.put(JSONObject().apply {
+                    put("type", runCatching {
+                        s.javaClass.getMethod("getType").invoke(s)?.toString()
+                    }.getOrNull() ?: "?")
+                    put("level", runCatching {
+                        (s.javaClass.getMethod("getLevel").invoke(s) as? Number)?.toInt()
+                    }.getOrNull() ?: -1)
+                    put("value", (runCatching {
+                        (s.javaClass.getMethod("getValue").invoke(s) as? Number)?.toDouble()
+                    }.getOrNull() ?: 0.0).let { if (it.isFinite()) it else 0.0 })
+                    put("message", runCatching {
+                        s.javaClass.getMethod("getMessage").invoke(s)?.toString()
+                    }.getOrNull() ?: "")
+                })
+            }
+            out.put("sensors", sensors)
+        }.onFailure { out.put("sensors", JSONArray()) }
         return out
     }
 

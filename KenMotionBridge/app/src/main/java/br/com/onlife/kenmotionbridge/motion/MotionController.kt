@@ -148,7 +148,7 @@ class MotionController(
             }
             "chassis" -> handleChassis(json)
             // ATIVADOR do chassi: alavancas do stack do fabricante (wakeup, modos, mapa).
-            // {"type":"chassis_ctl","action":"wakeup|idle|navi_mode|build_mode|begin_map|loc_on|loc_off|upd_on|upd_off|maps"}
+            // {"type":"chassis_ctl","action":"rebind|wakeup|idle|navi_mode|build_mode|begin_map|loc_on|loc_off|upd_on|upd_off|maps"}
             "chassis_ctl" -> {
                 val action = json.optString("action")
                 val res = chassis.chassisCtl(action)
