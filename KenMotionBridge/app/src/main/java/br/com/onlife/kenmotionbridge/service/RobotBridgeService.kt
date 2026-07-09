@@ -66,6 +66,7 @@ class RobotBridgeService : Service() {
     /** Diag de redes base (a saúde do chassi é anexada a cada ~3 s). */
     @Volatile private var baseNetDiag: String = ""
     private var healthTickCount = 0
+    private var diagTickCount = 0
 
     /** Canal de volta para o processo :mqtt publicar feedback/telemetria. */
     @Volatile private var feedbackSink: IFeedbackSink? = null
@@ -130,6 +131,17 @@ class RobotBridgeService : Service() {
         }
         motionSdk = KenMotionSdk(chassis)
         motion = MotionController(chassis, config, motionSdk)
+        // ACKs dos comandos de mapa e o diag sob demanda (map_status) saem pelo
+        // mesmo canal de feedback (ken/motion/feedback) via :mqtt.
+        motion.ackSink = { j -> sendFeedback(j.toString()) }
+        motion.diagRequester = { publicarDiag() }
+    }
+
+    /** Snapshot de diagnóstico (Rota A) — "type":"diag" em ken/motion/feedback. */
+    private fun publicarDiag(tel: SlamwareChassis.ChassisTelemetry? = null) {
+        runCatching {
+            sendFeedback((tel?.let { chassis.diagJson(it) } ?: chassis.diagJson()).toString())
+        }.onFailure { Log.w(TAG, "diag falhou: ${it.message}") }
     }
 
     private fun connectAll() {
@@ -270,6 +282,10 @@ class RobotBridgeService : Service() {
             put("ts", now)
         }
         sendFeedback(fb.toString())
+
+        // Diagnóstico Rota A: "type":"diag" no mesmo tópico de feedback, a cada 2 s
+        // (loop de 1 s, tick alternado). Reusa o `tel` já lido nesta passada.
+        if (++diagTickCount % 2 == 0) publicarDiag(tel)
 
         if (online) {
             val tj = chassis.telemetryJson().apply {

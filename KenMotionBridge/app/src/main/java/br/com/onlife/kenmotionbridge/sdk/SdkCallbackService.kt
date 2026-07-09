@@ -30,6 +30,7 @@ class SdkCallbackService : Service() {
         override fun sdkAppMsgToAar(msg: String?) {
             msg ?: return
             Log.d(TAG, "Mensagem do RobotSDK: $msg")
+            AarCapture.log("in", msg)
             SdkLink.onMessage(msg)
         }
     }
@@ -44,6 +45,25 @@ class SdkCallbackService : Service() {
  * Ponte estática entre o [SdkCallbackService] (chamado pelo binder do SDK) e o
  * [SlamwareChassis]/telemetria. Mantém o último estado para diagnóstico na tela.
  */
+/**
+ * CAPTURA do pipe AIDL do fabricante para montar o dicionário de opcodes reais
+ * (docs/aar_msg_capture.md). Nas DUAS direções o payload é String JSON — padrão
+ * coshandler REQ/NTF/RSP — e não byte[] opaco: `aarMsgToSDKApp(String)` (saída,
+ * logado em [SlamwareChassis.sendSdkMessage]) e `sdkAppMsgToAar(String)` (entrada,
+ * logado acima). Cada mensagem sai com tamanho + Base64 + prévia em texto, para
+ * correlacionar com cliques na UI da Delivery via `adb logcat -s AarMsgCapture`.
+ */
+object AarCapture {
+    private const val TAG = "AarMsgCapture"
+
+    fun log(direction: String, msg: String) {
+        runCatching {
+            val b64 = android.util.Base64.encodeToString(msg.toByteArray(), android.util.Base64.NO_WRAP)
+            Log.i(TAG, "$direction len=${msg.length} b64=$b64 preview=${msg.take(200)}")
+        }
+    }
+}
+
 object SdkLink {
     @Volatile var handshakeOk: Boolean = false
         private set

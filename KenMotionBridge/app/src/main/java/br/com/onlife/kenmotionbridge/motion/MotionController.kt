@@ -33,6 +33,18 @@ class MotionController(
         private const val V_MAX_BLIND = 0.35
     }
 
+    /** Canal de ACK dos comandos de mapa — o serviço publica em ken/motion/feedback. */
+    @Volatile var ackSink: ((JSONObject) -> Unit)? = null
+    /** Pedido de publicação IMEDIATA do diag (comando map_status). */
+    @Volatile var diagRequester: (() -> Unit)? = null
+
+    private fun ack(type: String, ok: Boolean, detail: String) {
+        val j = JSONObject().put("type", type).put("ok", ok).put("detail", detail)
+            .put("ts", System.currentTimeMillis())
+        runCatching { ackSink?.invoke(j) }
+            .onFailure { Log.w(TAG, "ack($type) falhou: ${it.message}") }
+    }
+
     /** Fim da janela do watchdog do modo cego (300 ms). 0 = modo cego inativo. */
     @Volatile private var blindUntil = 0L
     /** Modo cego ativo agora? (para o feedback blind_mode). */
@@ -114,6 +126,23 @@ class MotionController(
                 val res = if (json.has("value")) chassis.setSystemParam(key, json.optString("value"))
                           else "$key = " + chassis.getSystemParam(key)
                 lastCommandLabel = "sys_param $res"
+                lastCommandAt = System.currentTimeMillis()
+                Log.i(TAG, lastCommandLabel)
+            }
+            // ROTA A (mapa): map_status força o diag imediato; os demais acionam o
+            // mapCtl do chassi. Cada um responde {"type":…,"ok":…,"detail":…} no
+            // ken/motion/feedback (aceite: operador mapeia sem tocar no RoboStudio).
+            "map_status" -> {
+                diagRequester?.invoke()
+                ack("map_status", true, "diag publicado")
+                lastCommandLabel = "map_status → diag"
+                lastCommandAt = System.currentTimeMillis()
+            }
+            "build_mode", "begin_map", "end_map", "clear_map", "recover_localization" -> {
+                val tipo = json.optString("type")
+                val (ok, detail) = chassis.mapCtl(tipo)
+                ack(tipo, ok, detail)
+                lastCommandLabel = "$tipo → $detail"
                 lastCommandAt = System.currentTimeMillis()
                 Log.i(TAG, lastCommandLabel)
             }

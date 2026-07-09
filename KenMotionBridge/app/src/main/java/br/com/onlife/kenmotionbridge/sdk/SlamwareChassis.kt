@@ -8,6 +8,7 @@ import android.os.IBinder
 import android.util.Log
 import br.com.onlife.kenmotionbridge.BridgeConfig
 import com.csjbot.sdkhandler.IAarToSdkApp
+import org.json.JSONArray
 import org.json.JSONObject
 import java.lang.reflect.Method
 
@@ -323,6 +324,7 @@ class SlamwareChassis(
     /** Envia um comando JSON ao RobotSDK pelo canal AIDL oficial (aarMsgToSDKApp). */
     fun sendSdkMessage(json: String): Boolean {
         val b = sdkBinder ?: return false
+        AarCapture.log("out", json)
         return runCatching { b.aarMsgToSDKApp(json); true }
             .onFailure { warnOnce("aarMsgToSDKApp", it) }
             .getOrDefault(false)
@@ -529,6 +531,146 @@ class SlamwareChassis(
             }.getOrElse { "requireMapList: ${it.cause?.message ?: it.message}" }
             else -> "ação desconhecida: $action (use wakeup|idle|navi_mode|build_mode|begin_map|loc_on|loc_off|upd_on|upd_off|maps)"
         }
+    }
+
+    /**
+     * Controle de MAPA (Rota A) — alavancas mínimas para construir mapa e recuperar a
+     * localização direto do app web, sem RoboStudio. Assinaturas confirmadas por javap
+     * no RobotSDK-client.jar: setMapUpdate(boolean), clearMap(), beginBuildMap(),
+     * saveMap(String, boolean), recoverLocalization(PointF, float, float).
+     * @return ok + detalhe humano para o feedback {"type":action,"ok":…,"detail":…}.
+     */
+    fun mapCtl(action: String): Pair<Boolean, String> {
+        val p = platform ?: return false to "sem plataforma"
+        fun call(name: String): Pair<Boolean, String> = runCatching {
+            p.javaClass.getMethod(name).invoke(p); true to "$name OK"
+        }.getOrElse { false to "$name: ${it.cause?.message ?: it.message}" }
+        fun callBool(name: String, v: Boolean): Pair<Boolean, String> = runCatching {
+            p.javaClass.getMethod(name, Boolean::class.javaPrimitiveType).invoke(p, v); true to "$name($v) OK"
+        }.getOrElse { false to "$name: ${it.cause?.message ?: it.message}" }
+        fun merge(vararg r: Pair<Boolean, String>): Pair<Boolean, String> =
+            r.all { it.first } to r.joinToString(" | ") { it.second }
+        return when (action) {
+            "build_mode" -> callBool("setMapUpdate", true)
+            "begin_map" -> merge(call("clearMap"), call("beginBuildMap"))
+            "end_map" -> {
+                val save = runCatching {
+                    p.javaClass.getMethod("saveMap", String::class.java, Boolean::class.javaPrimitiveType)
+                        .invoke(p, "ken_map", true)
+                    true to "saveMap(ken_map) OK"
+                }.getOrElse { false to "saveMap: ${it.cause?.message ?: it.message}" }
+                merge(callBool("setMapUpdate", false), save)
+            }
+            "clear_map" -> call("clearMap")
+            "recover_localization" -> runCatching {
+                val t = readTelemetry()
+                val cx = if (t.poseX.isNaN()) 0f else t.poseX.toFloat()
+                val cy = if (t.poseY.isNaN()) 0f else t.poseY.toFloat()
+                val ptCls = Class.forName("com.slamtec.slamware.geometry.PointF")
+                val pt = ptCls.getConstructor(Float::class.javaPrimitiveType, Float::class.javaPrimitiveType)
+                    .newInstance(cx, cy)
+                // Busca em área 4×4 m centrada na pose atual.
+                p.javaClass.getMethod(
+                    "recoverLocalization", ptCls,
+                    Float::class.javaPrimitiveType, Float::class.javaPrimitiveType,
+                ).invoke(p, pt, 4f, 4f)
+                val st = runCatching {
+                    p.javaClass.getMethod("getRecoverLocalizationStatus").invoke(p)
+                }.getOrNull()
+                true to "recoverLocalization((%.2f, %.2f) 4×4m) OK · status=%s".format(cx, cy, st)
+            }.getOrElse { false to "recoverLocalization: ${it.cause?.message ?: it.message}" }
+            else -> false to "ação de mapa desconhecida: $action"
+        }
+    }
+
+    /**
+     * Snapshot de DIAGNÓSTICO ("type":"diag" em ken/motion/feedback, a cada 2 s).
+     * Prova/refuta a hipótese da Rota A: frente travada por falta de mapa/naviReady,
+     * não pela câmera. Campos primários NUNCA null enquanto bound (aceite do endpoint):
+     * indisponível degrada para 0/false, nunca para ausência.
+     */
+    fun diagJson(tel: ChassisTelemetry = readTelemetry()): JSONObject {
+        val p = platform
+        val out = JSONObject().apply {
+            put("type", "diag")
+            put("ts", System.currentTimeMillis())
+            put("sdk_bound", bound || p != null)
+            put("chassis_connected", connected && tel.dcConnected)
+            put("battery", if (tel.battery >= 0) tel.battery else 0)
+            put("charging", tel.charging)
+            put("pose", JSONObject().apply {
+                put("x", if (tel.poseX.isNaN()) 0.0 else round3(tel.poseX))
+                put("y", if (tel.poseY.isNaN()) 0.0 else round3(tel.poseY))
+                put("yaw_deg", if (tel.poseYawDeg.isNaN()) 0.0 else round1(tel.poseYawDeg))
+            })
+        }
+        if (p == null) {
+            return out.apply {
+                put("localization", 0.0)
+                put("navi_ready", false)
+                put("has_map", false)
+                put("map_cells", 0)
+                put("robot_health", JSONObject().put("hasError", false).put("hasFatal", false)
+                    .put("hasWarning", false).put("errors", JSONArray()))
+            }
+        }
+        // Localização normalizada 0–1 (o float do getLocalizationQuality é 0–1 nesta
+        // variante; tolera firmwares que reportam 0–100).
+        val locRaw = runCatching {
+            val q = p.javaClass.getMethod("getLocalizationQuality").invoke(p)
+            (q?.javaClass?.getMethod("getLocalizationQuality")?.invoke(q) as? Number)?.toDouble()
+        }.getOrNull() ?: 0.0
+        val loc = if (locRaw > 1.0) locRaw / 100.0 else locRaw
+        out.put("localization", round3(loc))
+
+        // Mapa corrente: nome + células. Sem getKnownArea neste jar, as células vêm das
+        // dimensões do getCurrentMapImage() — crescem conforme a área explorada.
+        val mapName = runCatching {
+            p.javaClass.getMethod("getCurrentMap").invoke(p) as? String
+        }.getOrNull().orEmpty()
+        var cells = 0
+        runCatching {
+            val bmp = p.javaClass.getMethod("getCurrentMapImage").invoke(p) as? android.graphics.Bitmap
+            if (bmp != null) { cells = bmp.width * bmp.height; bmp.recycle() }
+        }
+        val hasMap = cells > 0 || mapName.isNotEmpty()
+        out.put("has_map", hasMap)
+        out.put("map_cells", cells)
+        if (mapName.isNotEmpty()) out.put("map_name", mapName)
+
+        // naviReady: getter oficial; se ausente, deduzido de localization>0.5 && has_map.
+        val navi = runCatching {
+            p.javaClass.getMethod("isNaviReady").invoke(p) as? Boolean
+        }.getOrNull() ?: (loc > 0.5 && hasMap)
+        out.put("navi_ready", navi)
+
+        // Saúde na voz do firmware (HealthInfo: isError/isFatal/isWarning + errors[]).
+        val health = JSONObject()
+        runCatching {
+            val h = p.javaClass.getMethod("getRobotHealth").invoke(p)
+            fun hb(name: String) =
+                runCatching { h?.javaClass?.getMethod(name)?.invoke(h) as? Boolean }.getOrNull() ?: false
+            health.put("hasError", hb("isError"))
+            health.put("hasFatal", hb("isFatal"))
+            health.put("hasWarning", hb("isWarning"))
+            val arr = JSONArray()
+            runCatching { h?.javaClass?.getMethod("getErrors")?.invoke(h) as? List<*> }.getOrNull()
+                ?.filterNotNull()?.take(8)?.forEach { e ->
+                    arr.put(JSONObject().apply {
+                        put("id", runCatching { e.javaClass.getMethod("getId").invoke(e) }.getOrNull() ?: 0)
+                        put("code", runCatching { e.javaClass.getMethod("getErrorCode").invoke(e) }.getOrNull() ?: 0)
+                        put("message", runCatching {
+                            e.javaClass.getMethod("getErrorMessage").invoke(e)?.toString()
+                        }.getOrNull() ?: "")
+                    })
+                }
+            health.put("errors", arr)
+        }.onFailure {
+            health.put("hasError", false).put("hasFatal", false).put("hasWarning", false)
+            health.put("errors", JSONArray())
+        }
+        out.put("robot_health", health)
+        return out
     }
 
     /**
