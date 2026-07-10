@@ -50,6 +50,9 @@ class MainActivity : AppCompatActivity() {
                 this, "Teste FRENTE iniciado — acompanhe o resultado no log/feedback", android.widget.Toast.LENGTH_LONG
             ).show()
         }
+        binding.btnApps.setOnClickListener {
+            startActivity(Intent(this, AppManagerActivity::class.java))
+        }
         binding.btnSettings.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }

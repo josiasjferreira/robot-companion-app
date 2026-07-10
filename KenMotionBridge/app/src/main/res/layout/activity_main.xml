@@ -165,6 +165,13 @@
             android:text="Teste FRENTE 05/07" />
 
         <Button
+            android:id="@+id/btnApps"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Apps / Encerrar (abrir RoboStudio)" />
+
+        <Button
             android:id="@+id/btnSettings"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

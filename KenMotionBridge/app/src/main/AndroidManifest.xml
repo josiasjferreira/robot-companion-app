@@ -20,6 +20,9 @@
          com.csjbot.*/com.slamtec.* atrás do RobotSdkService real. Ferramenta interna
          de operação, sem distribuição na Play Store. -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <!-- Best-effort para encerrar processos em segundo plano de outros apps (não
+         força stop de kiosk em foreground — Android limita isso a system/root). -->
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
     <queries>
         <package android:name="com.csjbot.robotsdk.ten" />
         <package android:name="com.csjbot.diningcar" />
@@ -53,6 +56,12 @@
         <activity
             android:name=".SettingsActivity"
             android:exported="false"
+            android:parentActivityName=".MainActivity" />
+
+        <activity
+            android:name=".AppManagerActivity"
+            android:exported="false"
+            android:label="Apps / Encerrar"
             android:parentActivityName=".MainActivity" />
 
         <!-- Processo PRINCIPAL: chassi (amarra à rede do robô 192.168.99.x) -->
