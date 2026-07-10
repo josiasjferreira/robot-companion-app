@@ -925,7 +925,7 @@ class SlamwareChassis(
         }
     }
 
-    fun cancelAction() {
+    override fun cancelAction() {
         lastAction?.let { act -> runCatching { act.javaClass.getMethod("cancel").invoke(act) } }
         lastAction = null
         val p = platform ?: return
