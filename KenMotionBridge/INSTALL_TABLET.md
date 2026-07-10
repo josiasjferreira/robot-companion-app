@@ -60,6 +60,18 @@ mosquitto_pub -h SEU-CLUSTER.s1.eu.hivemq.cloud -p 8883 \
 mosquitto_pub ... -t ken/motion/cmd -m '{"type":"stop"}'
 ```
 
+> **Atenção ao watchdog (400 ms):** um publish único faz o robô apenas *tentar*
+> andar por ~0,4 s e parar. Para movimento sustentado, republique o comando a
+> cada ~200 ms — ou use o atalho `scripts/drive-test.sh` (raiz do repo), que lê
+> as credenciais do `.env`, republica a 5 Hz e envia `stop` ao final:
+>
+> ```bash
+> ../scripts/drive-test.sh frente 5 30   # frente por 5 s a 30% (Linux/macOS)
+> ../scripts/drive-test.sh feedback      # acompanha feedback + telemetria
+> ```
+>
+> No Windows: `..\scripts\drive-test.ps1 frente 5 30`.
+
 Acompanhe o feedback (resolve o "SEM SINAL"):
 
 ```bash

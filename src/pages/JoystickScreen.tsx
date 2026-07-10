@@ -64,6 +64,10 @@ export default function JoystickScreen() {
     };
     const cmd = cmds[direction];
     if (cmd) {
+      // Alimenta o loop contínuo (100 ms) em vez de publicar uma única vez:
+      // o watchdog de 400 ms do bridge zera a velocidade sem comandos novos,
+      // então um envio único só produz uma "tentativa" de ~0,4 s.
+      sendMovement(cmd.linear, cmd.angular);
       robotConnection.sendCommand({ cmd: 'move', ...cmd, timestamp: Date.now() });
       addLog({ timestamp: new Date(), type: 'sent', message: `D-Pad: ${direction}` });
     }
