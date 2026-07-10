@@ -38,6 +38,9 @@ class MotionController(
     /** Pedido de publicação IMEDIATA do diag (comando map_status). */
     @Volatile var diagRequester: (() -> Unit)? = null
 
+    /** FRENTE com gate de segurança (SlamwareIntegrationService). Retorna (aceito, motivo). */
+    @Volatile var safeForward: (() -> Pair<Boolean, String>)? = null
+
     private fun ack(type: String, ok: Boolean, detail: String) {
         val j = JSONObject().put("type", type).put("ok", ok).put("detail", detail)
             .put("ts", System.currentTimeMillis())
@@ -213,6 +216,15 @@ class MotionController(
             // {"type":"forward_probe","dist":0.3} — roda em thread; publica o diag
             // completo por ack e um resumo compacto no heartbeat (chassis.forwardProbeSummary).
             "forward_probe" -> runForwardProbe(json.optDouble("dist", 0.3).toFloat())
+            // FRENTE COM GATE de nav-ready (SlamwareIntegrationService.moveForwardSafe):
+            // só move se LocalizationQuality>0 && LaserScan>0; senão RECUSA com motivo.
+            "forward_safe" -> {
+                val r = safeForward?.invoke() ?: (false to "SlamwareIntegrationService indisponível")
+                ack("forward_safe", r.first, r.second)
+                lastCommandLabel = "forward_safe → ${r.second.take(48)}"
+                lastCommandAt = System.currentTimeMillis()
+                Log.i(TAG, lastCommandLabel)
+            }
             "chassis" -> handleChassis(json)
             // ATIVADOR do chassi: alavancas do stack do fabricante (wakeup, modos, mapa).
             // {"type":"chassis_ctl","action":"rebind|wakeup|idle|navi_mode|build_mode|begin_map|loc_on|loc_off|upd_on|upd_off|maps"}

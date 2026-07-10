@@ -53,6 +53,7 @@ internamente para m/s pelos tetos de `bridge_config.json`.
 | `chassis_ctl` | `{action}` | alavancas de fábrica — ver §4.2 |
 | `map_status`/`build_mode`/`begin_map`/`end_map`/`clear_map`/`recover_localization` | — | Rota A (mapa) |
 | `forward_probe` | `{dist?}` | **Caminho A** — varredura de FRENTE (§4.1) |
+| `forward_safe` | — | FRENTE com gate de nav-ready (SlamwareIntegrationService); recusa com motivo se sensor morto |
 | `front_test` | `{note?}` | cenário "FRENTE 05/07 revisitado" |
 | `sys_param` | `{key,value?}` | get/set de parâmetro de sistema |
 
@@ -63,6 +64,9 @@ internamente para m/s pelos tetos de `bridge_config.json`.
 - `type:"diag"` em `ken/motion/feedback` (2 s): `lidar_pts`, `depth_pts`,
   `work_mode`, `navi_ready`, `move_states`, `has_map`, `map_cells`,
   `robot_health` (flags + `errors[]`), `sensors[]` (LIDAR/DEPTH/ODOM_HEALTH).
+- `type:"perception"` em `ken/motion/feedback` (2 s, SlamwareIntegrationService):
+  `connected`, `lidar_pts`, `depth_pts`, `pose`, `localization_quality`,
+  `navigation_ready` — feed dedicado para separar App × Hardware nos logs.
 
 ## 4. Caminhos para destravar a FRENTE
 

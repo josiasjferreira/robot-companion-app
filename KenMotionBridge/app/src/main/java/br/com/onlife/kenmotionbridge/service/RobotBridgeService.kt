@@ -61,6 +61,7 @@ class RobotBridgeService : Service() {
     private lateinit var chassis: SlamwareChassis
     private lateinit var motionSdk: KenMotionSdk
     private lateinit var motion: MotionController
+    private lateinit var integration: br.com.onlife.kenmotionbridge.control.SlamwareIntegrationService
     private val networkRouter by lazy { NetworkRouter(this) }
     private var wakeLock: PowerManager.WakeLock? = null
     private var freshlyCreated = false
@@ -138,6 +139,9 @@ class RobotBridgeService : Service() {
         // mesmo canal de feedback (ken/motion/feedback) via :mqtt.
         motion.ackSink = { j -> sendFeedback(j.toString()) }
         motion.diagRequester = { publicarDiag() }
+        // Serviço de integração/percepção coeso (nav-ready + FRENTE com gate).
+        integration = br.com.onlife.kenmotionbridge.control.SlamwareIntegrationService(chassis)
+        motion.safeForward = { val r = integration.moveForwardSafe(); r.accepted to r.reason }
         // Resultado do cenário de teste FRENTE: publica no feedback E salva em arquivo
         // (filesDir/front_test_<ts>.json) para comparação futura pelo operador.
         motion.frontTestResultSink = { j ->
@@ -301,7 +305,13 @@ class RobotBridgeService : Service() {
 
         // Diagnóstico Rota A: "type":"diag" no mesmo tópico de feedback, a cada 2 s
         // (loop de 1 s, tick alternado). Reusa o `tel` já lido nesta passada.
-        if (++diagTickCount % 2 == 0) publicarDiag(tel)
+        if (++diagTickCount % 2 == 0) {
+            publicarDiag(tel)
+            // Estado de PERCEPÇÃO (SlamwareIntegrationService): lidar/depth/loc/nav_ready.
+            // "type":"perception" — para diagnosticar App × Hardware pelos logs.
+            runCatching { sendFeedback(integration.perceptionSnapshot().toJson().toString()) }
+                .onFailure { Log.w(TAG, "perception feedback falhou: ${it.message}") }
+        }
 
         if (online) {
             val tj = chassis.telemetryJson().apply {

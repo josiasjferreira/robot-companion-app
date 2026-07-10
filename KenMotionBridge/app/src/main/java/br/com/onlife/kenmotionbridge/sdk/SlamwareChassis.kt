@@ -423,6 +423,36 @@ class SlamwareChassis(
     /** Última ação de FRENTE (status persiste na tela mesmo após stop/outras direções). */
     @Volatile private var lastForwardAction: Any? = null
 
+    // ── Acessores numéricos de PERCEPÇÃO (usados pelo SlamwareIntegrationService) ──
+    // Reads tolerantes: falha → 0 / -1, nunca lança. Reusam a mesma reflexão dos
+    // sumários textuais, mas devolvem valores tipados para lógica (nav-ready).
+
+    /** Nº de pontos do LIDAR (getLaserScan().getLaserPoints().size), 0 se indisponível. */
+    fun laserPointCount(): Int = runCatching {
+        val p = platform ?: return 0
+        val scan = p.javaClass.getMethod("getLaserScan").invoke(p) ?: return 0
+        (scan.javaClass.getMethod("getLaserPoints").invoke(scan) as? List<*>)?.size ?: 0
+    }.getOrDefault(0)
+
+    /** Nº de pontos da câmera de profundidade (getDepthSensorData().size), 0 se indisponível. */
+    fun depthPointCount(): Int = runCatching {
+        val p = platform ?: return 0
+        (p.javaClass.getMethod("getDepthSensorData").invoke(p) as? List<*>)?.size ?: 0
+    }.getOrDefault(0)
+
+    /**
+     * Qualidade de localização normalizada 0–1 (getLocalizationQuality). -1 se
+     * indisponível. Tolera firmwares que reportam 0–100 (divide por 100).
+     */
+    fun localizationQuality01(): Double = runCatching {
+        val p = platform ?: return -1.0
+        val q = p.javaClass.getMethod("getLocalizationQuality").invoke(p) ?: return -1.0
+        val raw = (runCatching { q.javaClass.getMethod("getLocalizationQuality").invoke(q) as? Number }.getOrNull()
+            ?: runCatching { q.javaClass.getMethod("getLevel").invoke(q) as? Number }.getOrNull())?.toDouble()
+            ?: return -1.0
+        if (raw > 1.0) raw / 100.0 else raw
+    }.getOrDefault(-1.0)
+
     /** Status/motivo da última tentativa de FRENTE — não é apagado por stop/ré/giros. */
     override fun lastForwardStatus(): String {
         val a = lastForwardAction ?: return ""
