@@ -2,8 +2,9 @@
 
 **Robô:** CSJBot CT300‑H (Emy/Ken) · **SDK:** RobotSDK 2.4.0 (núcleo Slamware)
 **App de teste:** KenMotionBridge (ponte MQTT ⇄ SlamwareCorePlatform, TCP 1445)
-**Data da consolidação:** 2026‑07‑09 · **Status:** bloqueio ativo, causa isolada
-no lado do robô (percepção), não no cliente.
+**Data da consolidação:** 2026‑07‑09 · **Atualizado:** 2026‑07‑10 (teste‑oráculo
+concluído) · **Status: CAUSA CONFIRMADA no robô (hardware/firmware de
+percepção‑navegação), não no cliente/ponte.**
 
 ---
 
@@ -142,49 +143,86 @@ Isso explica **todos** os sintomas de uma vez:
 
 ---
 
-## 7. Ações recomendadas (ordem de custo/risco)
+## 7. TESTE‑ORÁCULO CONCLUÍDO (2026‑07‑10) — causa confirmada no robô
 
-1. **Reboot do robô na doca** — remédio do próprio manual RobotStation (§2.4.2:
-   *"desligue o robô, encoste na estação de carga e reinicie"*). É o reset do
-   serviço de percepção. Depois, ler `lidar_pts` **antes** de qualquer comando.
-2. **`clear_health`** (`clearRobotHealth`) + reler, caso haja latch residual.
-3. **Teste‑oráculo com o app da fábrica** — instalar o **RoboStudio 1.0.25** no
-   tablet, conectar em `192.168.99.2`, entrar em scan mode e empurrar o robô:
-   - RoboStudio **também** mostra 0 pontos / mapa vazio ⇒ **prova de hardware /
-     serviço do robô** ⇒ abrir chamado CSJBot (texto no §8).
-   - RoboStudio mostra pontos e nós não ⇒ há algo no nosso cliente; comparar com
-     a captura `AarMsgCapture` do pipe AIDL.
-4. **Inspeção física / suporte** — se 1–3 não trouxerem `lidar_pts > 0`:
-   verificar alimentação e cabo/USB do RPLIDAR e da câmera de profundidade, e
-   solicitar à CSJBot o procedimento de reinício do serviço de percepção
-   (SLAM/scan) do CT300‑H.
+Executado exatamente como planejado: instalado o **RoboStudio 1.0.25** (app
+oficial do fabricante) no mesmo tablet, conexão **local direta** em
+`192.168.99.2` (sem qualquer código nosso no caminho), entrada no modo de
+mapeamento (`未命名` / scan mode).
 
-Só com **`lidar_pts > 0`** faz sentido retomar: `build_mode` → `begin_map` →
-empurrar/joystick (ver `map_cells` subir) → `end_map` → `recover_localization`
-→ FRENTE.
+**Resultado, em duas etapas:**
+
+1. **Área de mapa permaneceu vazia** (cinza, sem nuvem de pontos) ao entrar no
+   modo de scan — mesmo sintoma do `lidar_pts=0` que a nossa ponte já reportava.
+2. **O próprio RoboStudio caiu com o erro nativo:**
+
+   > **断开连接** (Desconectado) — *"您和导航的连接已经断开，请重新登录。"*
+   > ("Sua conexão com a navegação foi interrompida, faça login novamente.")
+
+**Por que isso fecha o diagnóstico:** esse popup é gerado pelo **software do
+próprio fabricante**, sem nenhuma linha do KenMotionBridge envolvida. O
+RoboStudio, conectado localmente ao mesmo robô, **perdeu a sessão com o
+subsistema de navegação/SLAM** — a mesmíssima classe de falha observada pela
+nossa ponte (percepção que não publica dados). É a terceira confirmação
+independente do mesmo problema:
+
+| # | Cliente | Resultado |
+|---|---|---|
+| 1 | KenMotionBridge (nosso) | `lidar_pts=0`, `depth_pts=0`, pose congelada |
+| 2 | RoboStudio 1.0.25 (fábrica) — modo scan | área de mapa vazia, sem nuvem de pontos |
+| 3 | RoboStudio 1.0.25 (fábrica) — durante o uso | **desconexão nativa do módulo de navegação** ("断开连接…导航…") |
+
+**Conclusão: a causa está isolada no robô — o serviço de percepção/navegação
+(núcleo Slamware/SLAM) está instável ou fora do ar no firmware do CT300‑H.**
+Não é bug de cliente, não é falha de protocolo MQTT, não é ausência de bind
+AIDL, não é configuração de app. É hardware/firmware do robô.
 
 ---
 
-## 8. Texto sugerido para o chamado CSJBot
+## 8. Ações recomendadas (ordem de custo/risco)
+
+1. ~~Reboot do robô na doca~~ — se ainda não tentado, é o próximo passo mais
+   barato antes de escalar (remédio do manual RobotStation §2.4.2). Depois,
+   reabrir o RoboStudio OU o KenMotionBridge e checar `lidar_pts` antes de
+   qualquer comando.
+2. ~~Teste‑oráculo com o app da fábrica~~ — **concluído em 2026‑07‑10, ver §7.**
+   Resultado: confirma hardware/firmware, não cliente.
+3. **Abrir chamado com a CSJBot / fornecedor** com o texto do §9 — a evidência
+   já está completa e não depende mais de nenhum teste adicional do nosso lado.
+4. **Inspeção física**, se solicitada pelo suporte: verificar alimentação e
+   cabo/USB do RPLIDAR e da câmera de profundidade, e o procedimento de
+   reinício do serviço de percepção (SLAM/scan) do CT300‑H.
+
+Só com **`lidar_pts > 0`** (confirmado por qualquer um dos dois apps) faz
+sentido retomar o software: `build_mode` → `begin_map` → empurrar/joystick
+(ver `map_cells` subir) → `end_map` → `recover_localization` → FRENTE.
+
+---
+
+## 9. Texto para o chamado CSJBot (evidência completa)
 
 > CT300‑H: sessão Slamware (TCP 1445, 192.168.99.2) ativa e respondendo
 > (`getDCIsConnected=true`, bateria e comandos OK), porém **LIDAR
 > (`getLaserScan`=0 pts), câmera de profundidade (`getDepthSensorData`=0 pts) e
 > odometria (`getPose` congelada na origem, `LocalizationQuality`=0%) reportam
 > zero simultaneamente e de forma persistente após o boot**. `getRobotHealth()`
-> retorna "sem erros" (nenhuma flag de LIDAR/câmera desconectados). Movimentos de
-> ré e giro funcionam; qualquer avanço para frente fica preso em
-> `WAITING_FOR_START`. O app oficial RoboStudio 1.0.25, no mesmo robô, [não
-> exibe nuvem de pontos / mapa vazio] — confirmando que o subsistema de
-> percepção/SLAM do robô não está publicando dados. Solicitamos o procedimento
-> de reinício do serviço de percepção e/ou verificação de hardware do RPLIDAR e
-> da câmera de profundidade.
-
-*(preencher o trecho entre colchetes com o resultado do teste‑oráculo do §7.3.)*
+> retorna "sem erros" (nenhuma flag de LIDAR/câmera desconectados). Movimentos
+> de ré e giro funcionam; qualquer avanço para frente fica preso em
+> `WAITING_FOR_START`.
+>
+> **Teste com o app oficial RoboStudio 1.0.25, no mesmo robô, conexão local
+> direta (sem app de terceiros no caminho): (1) o modo de mapeamento não exibe
+> nuvem de pontos (área do mapa permanece vazia); (2) o próprio RoboStudio
+> reporta desconexão nativa do módulo de navegação ("断开连接 — 您和导航的连接
+> 已经断开，请重新登录").** Isso confirma que o problema está no subsistema de
+> percepção/navegação (SLAM) do robô, não em nenhum software cliente.
+>
+> Solicitamos o procedimento de reinício do serviço de navegação/percepção do
+> CT300‑H e/ou verificação de hardware do RPLIDAR e da câmera de profundidade.
 
 ---
 
-## 9. Recursos de diagnóstico já disponíveis no KenMotionBridge
+## 10. Recursos de diagnóstico já disponíveis no KenMotionBridge
 
 Para instrumentar os próximos testes sem depender de foto da tela:
 
