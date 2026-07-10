@@ -51,6 +51,8 @@ class RobotBridgeService : Service() {
         const val ACTION_RESTART = "br.com.onlife.kenmotionbridge.RESTART"
         /** Dispara o cenário de teste FRENTE 05/07 (botão da UI). */
         const val ACTION_FRONT_TEST = "br.com.onlife.kenmotionbridge.FRONT_TEST"
+        /** Dispara a FRENTE com gate de nav-ready (botão "Percepção / Frente segura"). */
+        const val ACTION_FORWARD_SAFE = "br.com.onlife.kenmotionbridge.FORWARD_SAFE"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -118,6 +120,7 @@ class RobotBridgeService : Service() {
             ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
             ACTION_RESTART -> if (!freshlyCreated) restartConnections()
             ACTION_FRONT_TEST -> runCatching { motion.onCommand("""{"type":"front_test"}""") }
+            ACTION_FORWARD_SAFE -> runForwardSafeFromUi()
         }
         freshlyCreated = false
         return START_STICKY
@@ -151,6 +154,21 @@ class RobotBridgeService : Service() {
                 f.writeText(j.toString(2))
                 Log.i(TAG, "Resultado do teste FRENTE salvo em ${f.absolutePath}")
             }.onFailure { Log.w(TAG, "Falha ao salvar resultado do teste: ${it.message}") }
+        }
+    }
+
+    /** Botão "Percepção / Frente segura": FRENTE com gate + reflete o resultado na UI. */
+    private fun runForwardSafeFromUi() {
+        scope.launch {
+            val r = runCatching { integration.moveForwardSafe() }.getOrElse {
+                br.com.onlife.kenmotionbridge.control.SlamwareIntegrationService.MoveResult(false, "erro: ${it.message}")
+            }
+            val label = (if (r.accepted) "✅ " else "⛔ ") + r.reason
+            StatusBus.update { it.copy(lastForwardSafe = label) }
+            sendFeedback(org.json.JSONObject().apply {
+                put("type", "forward_safe"); put("accepted", r.accepted)
+                put("reason", r.reason); put("ts", System.currentTimeMillis())
+            }.toString())
         }
     }
 
@@ -308,9 +326,18 @@ class RobotBridgeService : Service() {
         if (++diagTickCount % 2 == 0) {
             publicarDiag(tel)
             // Estado de PERCEPÇÃO (SlamwareIntegrationService): lidar/depth/loc/nav_ready.
-            // "type":"perception" — para diagnosticar App × Hardware pelos logs.
-            runCatching { sendFeedback(integration.perceptionSnapshot().toJson().toString()) }
-                .onFailure { Log.w(TAG, "perception feedback falhou: ${it.message}") }
+            // "type":"perception" — para diagnosticar App × Hardware pelos logs + UI.
+            runCatching {
+                val snap = integration.perceptionSnapshot()
+                sendFeedback(snap.toJson().toString())
+                StatusBus.update {
+                    it.copy(
+                        lidarPts = snap.lidarPts, depthPts = snap.depthPts,
+                        localizationQuality = snap.localizationQuality,
+                        navigationReady = snap.navigationReady,
+                    )
+                }
+            }.onFailure { Log.w(TAG, "perception feedback falhou: ${it.message}") }
         }
 
         if (online) {

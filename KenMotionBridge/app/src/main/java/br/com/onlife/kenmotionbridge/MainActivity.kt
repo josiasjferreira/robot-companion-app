@@ -35,6 +35,12 @@ class MainActivity : AppCompatActivity() {
             startService(Intent(this, RobotBridgeService::class.java).apply { action = RobotBridgeService.ACTION_STOP })
             startService(Intent(this, MqttBridgeService::class.java).apply { action = RobotBridgeService.ACTION_STOP })
         }
+        binding.btnForwardSafe.setOnClickListener {
+            // FRENTE com gate de nav-ready (SlamwareIntegrationService).
+            startService(Intent(this, RobotBridgeService::class.java).apply {
+                action = RobotBridgeService.ACTION_FORWARD_SAFE
+            })
+        }
         binding.btnFrontTest.setOnClickListener {
             // Dispara o cenário "FRENTE 05/07 revisitado" no processo do chassi.
             startService(Intent(this, RobotBridgeService::class.java).apply {
@@ -96,6 +102,16 @@ class MainActivity : AppCompatActivity() {
                         else -> "Telemetria: ativa  |  Loc: ${if (s.localization < 0) "—" else "${s.localization}%"}"
                     }
                     binding.txtNet.text = s.netInfo.ifBlank { "—" }
+
+                    // Percepção (SLAM) — lidar/depth/loc/nav-ready + resultado da frente segura.
+                    val lidar = if (s.lidarPts < 0) "—" else "${s.lidarPts}"
+                    val depth = if (s.depthPts < 0) "—" else "${s.depthPts}"
+                    val loc = if (s.localizationQuality.isNaN()) "—"
+                        else "%.2f".format(s.localizationQuality)
+                    val nav = if (s.navigationReady) "PRONTA ✅" else "não ⛔"
+                    binding.txtPerception.text =
+                        "lidar: $lidar pts   depth: $depth pts   loc: $loc   nav: $nav"
+                    binding.txtForwardSafe.text = s.lastForwardSafe
                 }
             }
         }

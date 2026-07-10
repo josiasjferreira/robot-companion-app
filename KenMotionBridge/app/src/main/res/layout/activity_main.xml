@@ -101,6 +101,32 @@
             android:fontFamily="monospace"
             android:text="—" />
 
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Percepção (SLAM)"
+            android:textColor="#8B98A5"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+        <TextView
+            android:id="@+id/txtPerception"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="#9ECBFF"
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:text="lidar: —  depth: —  loc: —  nav: —" />
+        <TextView
+            android:id="@+id/txtForwardSafe"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textColor="#C9D1D9"
+            android:textSize="12sp"
+            android:text="" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -123,6 +149,13 @@
                 android:layout_weight="1"
                 android:text="Parar ponte" />
         </LinearLayout>
+
+        <Button
+            android:id="@+id/btnForwardSafe"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Percepção / Frente segura" />
 
         <Button
             android:id="@+id/btnFrontTest"

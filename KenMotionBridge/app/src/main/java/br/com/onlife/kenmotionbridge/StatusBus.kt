@@ -40,6 +40,17 @@ data class BridgeStatus(
     val telemetryAt: Long = 0L,
     /** Inventário das redes do tablet (diagnóstico de roteamento dual-homing). */
     val netInfo: String = "",
+    // ── Percepção (SlamwareIntegrationService) ────────────────────────────────
+    /** Nº de pontos do LIDAR na última leitura. -1 = ainda não lido. */
+    val lidarPts: Int = -1,
+    /** Nº de pontos da câmera de profundidade. -1 = ainda não lido. */
+    val depthPts: Int = -1,
+    /** Qualidade de localização 0–1 (NaN se indisponível). */
+    val localizationQuality: Double = Double.NaN,
+    /** Navegação pronta? (loc>0 && lidar>0) — portão da FRENTE. */
+    val navigationReady: Boolean = false,
+    /** Resultado da última FRENTE segura (forward_safe): aceito/motivo. */
+    val lastForwardSafe: String = "",
 )
 
 object StatusBus {
