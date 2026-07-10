@@ -197,6 +197,39 @@ class SlamwareIntegrationService(
         return MoveResult(res.contains("enviado"), res)
     }
 
+    /**
+     * FRENTE UNIFICADA — consolida TODO o aprendizado de 05–10/07 num único
+     * pipeline que escolhe a melhor estratégia conforme a percepção REAL:
+     *
+     *  1. `navigationReady` (loc>0 && lidar>0)  → `moveBy(FORWARD)` — caminho OA
+     *     nativo do firmware, o mesmo do fabricante. É o modo pleno.
+     *  2. LIDAR vivo mas sem localização (mapeando/PLANTA em construção, como na
+     *     sessão do RoboStudio) → `trackForward` — odometria funciona durante o
+     *     build map, sem exigir mapa fechado.
+     *  3. Percepção morta (lidar=0) → RECUSA com motivo — nunca comanda às cegas.
+     *
+     * O `reason` sempre diz QUAL caminho foi usado/negado, para o feedback/UI.
+     */
+    fun unifiedForward(distM: Float = 0.5f): MoveResult {
+        if (!isConnected()) return MoveResult(false, "sem conexão com o chassi")
+        val lidar = chassis.laserPointCount()
+        val loc = chassis.localizationQuality01()
+        return when {
+            navReady(loc, lidar) -> {
+                val ok = chassis.moveBy(SlamwareChassis.Dir.FORWARD)
+                MoveResult(ok, "via OA nativo (navegação pronta: loc=%.2f, lidar=%d) — moveBy(FORWARD) %s"
+                    .format(loc, lidar, if (ok) "enviado" else "falhou"))
+            }
+            lidar > 0 -> {
+                val res = chassis.trackForward(distM)
+                MoveResult(res.contains("enviado"),
+                    "via TRACK (LIDAR vivo=%dpts, mapeando; loc=%.2f) — %s".format(lidar, loc, res))
+            }
+            else -> MoveResult(false,
+                "RECUSADA: percepção morta (lidar=0, loc=%.2f) — iniciar scan/mapa primeiro".format(loc))
+        }
+    }
+
     /** Parada segura. */
     fun stop() = chassis.cancelAction()
 }

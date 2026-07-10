@@ -145,6 +145,7 @@ class RobotBridgeService : Service() {
         // Serviço de integração/percepção coeso (nav-ready + FRENTE com gate).
         integration = br.com.onlife.kenmotionbridge.control.SlamwareIntegrationService(chassis)
         motion.safeForward = { val r = integration.moveForwardSafe(); r.accepted to r.reason }
+        motion.unifiedForwardFn = { d -> val r = integration.unifiedForward(d); r.accepted to r.reason }
         // Resultado do cenário de teste FRENTE: publica no feedback E salva em arquivo
         // (filesDir/front_test_<ts>.json) para comparação futura pelo operador.
         motion.frontTestResultSink = { j ->
@@ -157,16 +158,19 @@ class RobotBridgeService : Service() {
         }
     }
 
-    /** Botão "Percepção / Frente segura": FRENTE com gate + reflete o resultado na UI. */
+    /**
+     * Botão "Percepção / Frente segura": usa a FRENTE UNIFICADA (escada
+     * OA→TRACK→recusa conforme a percepção) e reflete o resultado na UI.
+     */
     private fun runForwardSafeFromUi() {
         scope.launch {
-            val r = runCatching { integration.moveForwardSafe() }.getOrElse {
+            val r = runCatching { integration.unifiedForward(0.5f) }.getOrElse {
                 br.com.onlife.kenmotionbridge.control.SlamwareIntegrationService.MoveResult(false, "erro: ${it.message}")
             }
             val label = (if (r.accepted) "✅ " else "⛔ ") + r.reason
             StatusBus.update { it.copy(lastForwardSafe = label) }
             sendFeedback(org.json.JSONObject().apply {
-                put("type", "forward_safe"); put("accepted", r.accepted)
+                put("type", "forward_unified"); put("accepted", r.accepted)
                 put("reason", r.reason); put("ts", System.currentTimeMillis())
             }.toString())
         }
@@ -337,6 +341,8 @@ class RobotBridgeService : Service() {
                         navigationReady = snap.navigationReady,
                     )
                 }
+                // Dica para o joystick em modo AUTO (OA quando a navegação está pronta).
+                motion.navReadyHint = snap.navigationReady
             }.onFailure { Log.w(TAG, "perception feedback falhou: ${it.message}") }
         }
 

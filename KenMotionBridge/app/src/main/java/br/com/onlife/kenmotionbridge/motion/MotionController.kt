@@ -41,6 +41,9 @@ class MotionController(
     /** FRENTE com gate de segurança (SlamwareIntegrationService). Retorna (aceito, motivo). */
     @Volatile var safeForward: (() -> Pair<Boolean, String>)? = null
 
+    /** FRENTE UNIFICADA (escada OA→TRACK→recusa conforme percepção). Retorna (aceito, motivo). */
+    @Volatile var unifiedForwardFn: ((Float) -> Pair<Boolean, String>)? = null
+
     private fun ack(type: String, ok: Boolean, detail: String) {
         val j = JSONObject().put("type", type).put("ok", ok).put("detail", detail)
             .put("ts", System.currentTimeMillis())
@@ -175,7 +178,11 @@ class MotionController(
             }
             // Alterna a estratégia da frente do joystick: {"type":"forward_mode","mode":"track|oa"}
             "forward_mode" -> {
-                forwardMode = if (json.optString("mode") == "oa") ForwardMode.OA else ForwardMode.TRACK
+                forwardMode = when (json.optString("mode")) {
+                    "oa" -> ForwardMode.OA
+                    "track" -> ForwardMode.TRACK
+                    else -> ForwardMode.AUTO
+                }
                 lastCommandLabel = "forward_mode = $forwardMode"
                 lastCommandAt = System.currentTimeMillis()
             }
@@ -216,6 +223,16 @@ class MotionController(
             // {"type":"forward_probe","dist":0.3} — roda em thread; publica o diag
             // completo por ack e um resumo compacto no heartbeat (chassis.forwardProbeSummary).
             "forward_probe" -> runForwardProbe(json.optDouble("dist", 0.3).toFloat())
+            // FRENTE UNIFICADA: {"type":"forward_unified","dist":0.5} — escada
+            // automática: nav pronta→OA nativo; LIDAR vivo→TRACK; morto→recusa.
+            "forward_unified" -> {
+                val dist = json.optDouble("dist", 0.5).toFloat()
+                val r = unifiedForwardFn?.invoke(dist) ?: (false to "SlamwareIntegrationService indisponível")
+                ack("forward_unified", r.first, r.second)
+                lastCommandLabel = "forward_unified → ${r.second.take(48)}"
+                lastCommandAt = System.currentTimeMillis()
+                Log.i(TAG, lastCommandLabel)
+            }
             // FRENTE COM GATE de nav-ready (SlamwareIntegrationService.moveForwardSafe):
             // só move se LocalizationQuality>0 && LaserScan>0; senão RECUSA com motivo.
             "forward_safe" -> {
@@ -376,17 +393,23 @@ class MotionController(
      */
     private fun drive(dir: SlamwareChassis.Dir) {
         if (dir == SlamwareChassis.Dir.FORWARD) {
-            // A FRENTE via moveBy(FORWARD) trava em WAITING_FOR_START (desvio de
-            // obstáculo esperando a câmera, que está sem leitura). Usamos o AVANÇO
-            // CEGO por odometria (moveTo + MoveTypeTrack), que NÃO espera sensor.
-            // Reemite um alvo curto à frente a cada ~0,5 s enquanto o joystick segura.
-            if (forwardMode == ForwardMode.TRACK) {
+            // FRENTE UNIFICADA (aprendizado 05–10/07): com navegação pronta o OA
+            // nativo do firmware é o caminho pleno (o mesmo do fabricante); sem
+            // localização, TRACK avança por odometria (funciona durante o build
+            // map, como visto na sessão do RoboStudio). AUTO decide pela dica de
+            // percepção (navReadyHint, atualizada a cada 2 s); TRACK/OA forçam.
+            val useTrack = when (forwardMode) {
+                ForwardMode.TRACK -> true
+                ForwardMode.OA -> false
+                ForwardMode.AUTO -> !navReadyHint
+            }
+            if (useTrack) {
                 val res = chassis.trackForward(0.5f)
                 lastCommandLabel = "frente(track) → $res"
                 return
             }
             chassis.lastActionStatus().takeIf { it.isNotEmpty() }?.let { st ->
-                lastCommandLabel = "frente → $st"
+                lastCommandLabel = "frente(oa) → $st"
             }
             chassis.moveBy(dir)
             motionSdk?.moverNativo(dir)
@@ -395,9 +418,17 @@ class MotionController(
         chassis.moveBy(dir)
     }
 
-    /** Estratégia de avanço: TRACK (odometria cega, contorna o desvio) ou OA (moveBy padrão). */
-    enum class ForwardMode { TRACK, OA }
-    @Volatile var forwardMode: ForwardMode = ForwardMode.TRACK
+    /**
+     * Estratégia de avanço do joystick:
+     *  - AUTO (padrão): decide pela percepção — navegação pronta → OA nativo do
+     *    firmware; senão → TRACK. É a UNIFICAÇÃO do aprendizado de 05–10/07.
+     *  - TRACK / OA: forçam o caminho manualmente ({"type":"forward_mode"}).
+     */
+    enum class ForwardMode { AUTO, TRACK, OA }
+    @Volatile var forwardMode: ForwardMode = ForwardMode.AUTO
+
+    /** Dica de nav-ready (atualizada a cada 2 s pelo snapshot de percepção do serviço). */
+    @Volatile var navReadyHint: Boolean = false
 
     private fun stopDrive() {
         if (lastDir == null) return

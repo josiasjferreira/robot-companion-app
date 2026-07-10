@@ -54,6 +54,8 @@ internamente para m/s pelos tetos de `bridge_config.json`.
 | `map_status`/`build_mode`/`begin_map`/`end_map`/`clear_map`/`recover_localization` | — | Rota A (mapa) |
 | `forward_probe` | `{dist?}` | **Caminho A** — varredura de FRENTE (§4.1) |
 | `forward_safe` | — | FRENTE com gate de nav-ready (SlamwareIntegrationService); recusa com motivo se sensor morto |
+| `forward_unified` | `{dist?}` | **FRENTE UNIFICADA** — escada automática: nav pronta→OA nativo; LIDAR vivo→TRACK; morto→recusa com motivo |
+| `forward_mode` | `{mode:"auto"\|"track"\|"oa"}` | estratégia do joystick p/ frente (padrão AUTO: decide pela percepção) |
 | `front_test` | `{note?}` | cenário "FRENTE 05/07 revisitado" |
 | `sys_param` | `{key,value?}` | get/set de parâmetro de sistema |
 
