@@ -925,6 +925,131 @@ class SlamwareChassis(
         }
     }
 
+    /** Resumo compacto da última varredura de FRENTE (Caminho A) para o heartbeat. */
+    @Volatile private var lastForwardProbe: JSONObject? = null
+    fun forwardProbeSummary(): JSONObject? = lastForwardProbe
+
+    /**
+     * CAMINHO A — varredura de FRENTE com as alavancas REAIS do MoveOption.
+     *
+     * O spec original citava flags que NÃO existem nesta geração do SDK
+     * (FLAG_MOVE_WITHOUT_STOP_AT_OBSTACLE, isWithYielding, moveBy(dir, opt)).
+     * Confirmado por javap: MoveOption expõe setters booleanos
+     * (setTrackWithOA/setNoSmooth/setPrecise/setKeyPoints/setMilestone/
+     * setReturnUnreachableDirectly) + setMoveType(MoveTypeOA|Track|TrackWitOA);
+     * e opções viajam por moveBy(float,MoveOption) e moveTo(Location,MoveOption,yaw).
+     * O equivalente real de "sem gate de obstáculo" é MoveTypeTrack + trackWithOA=false.
+     *
+     * Testa uma matriz de configurações, cada uma com sua própria ação, lê o
+     * ActionStatus/reason após uma janela curta, classifica (ok/waiting_for_start/
+     * blocked/exception) e devolve o diagnóstico. Cancela entre tentativas.
+     * @return JSON {path:"A", dist, attempts:[…], any_ok, conclusion}.
+     */
+    fun forwardProbe(distM: Float = 0.3f): JSONObject {
+        val p = platform ?: return JSONObject().put("path", "A").put("error", "sem plataforma")
+        val locCls = Class.forName("com.slamtec.slamware.robot.Location")
+        val optCls = Class.forName("com.slamtec.slamware.robot.MoveOption")
+        val mtCls = Class.forName("com.slamtec.slamware.robot.MoveOption\$MoveType")
+        val dirCls = Class.forName(MOVE_DIR_CLS)
+
+        fun moveType(name: String) = mtCls.getMethod("valueOf", String::class.java).invoke(null, name)
+        fun newOpt(apply: (Any) -> Unit): Any {
+            val o = optCls.getDeclaredConstructor().newInstance(); apply(o); return o
+        }
+        fun loc() = locCls.getConstructor(
+            Float::class.javaPrimitiveType, Float::class.javaPrimitiveType, Float::class.javaPrimitiveType
+        ).newInstance(distM, 0f, 0f)
+
+        fun classify(status: String?): String = when {
+            status == null -> "exception"
+            status.contains("FINISHED") || status.contains("RUNNING") -> "ok"
+            status.contains("WAITING_FOR_START") -> "waiting_for_start"
+            status.contains("BLOCKED") -> "blocked"
+            else -> status.lowercase()
+        }
+
+        // Executa UMA tentativa: roda o bloco (devolve IMoveAction), espera, lê status.
+        fun attempt(name: String, exec: () -> Any?): JSONObject {
+            val j = JSONObject().put("config", name)
+            try {
+                val action = exec()
+                lastAction = action; lastForwardAction = action
+                Thread.sleep(800L)
+                val status = runCatching { action?.javaClass?.getMethod("getStatus")?.invoke(action)?.toString() }.getOrNull()
+                val reason = runCatching { action?.javaClass?.getMethod("getReason")?.invoke(action)?.toString() }.getOrNull()
+                j.put("result", classify(status)).put("status", status ?: "null")
+                if (!reason.isNullOrBlank() && reason != "null") j.put("reason", reason)
+            } catch (t: Throwable) {
+                val c = t.cause ?: t
+                j.put("result", "exception").put("exception_class", c.javaClass.simpleName)
+                    .put("exception_msg", c.message ?: "")
+            } finally {
+                runCatching { lastAction?.javaClass?.getMethod("cancel")?.invoke(lastAction) }
+                Thread.sleep(200L)
+            }
+            return j
+        }
+
+        val attempts = JSONArray()
+        // 1) "sem gate": MoveTypeTrack + trackWithOA=false via moveTo.
+        attempts.put(attempt("moveTo Track trackWithOA=false") {
+            val o = newOpt {
+                optCls.getMethod("setMoveType", mtCls).invoke(it, moveType("MoveTypeTrack"))
+                optCls.getMethod("setTrackWithOA", Boolean::class.javaPrimitiveType).invoke(it, false)
+                optCls.getMethod("setReturnUnreachableDirectly", Boolean::class.javaPrimitiveType).invoke(it, true)
+            }
+            p.javaClass.getMethod("moveTo", locCls, optCls, Float::class.javaPrimitiveType).invoke(p, loc(), o, 0f)
+        })
+        // 2) MoveTypeTrackWitOA via moveTo.
+        attempts.put(attempt("moveTo TrackWitOA") {
+            val o = newOpt { optCls.getMethod("setMoveType", mtCls).invoke(it, moveType("MoveTypeTrackWitOA")) }
+            p.javaClass.getMethod("moveTo", locCls, optCls, Float::class.javaPrimitiveType).invoke(p, loc(), o, 0f)
+        })
+        // 3) MoveTypeOA + noSmooth via moveTo.
+        attempts.put(attempt("moveTo OA noSmooth") {
+            val o = newOpt {
+                optCls.getMethod("setMoveType", mtCls).invoke(it, moveType("MoveTypeOA"))
+                optCls.getMethod("setNoSmooth", Boolean::class.javaPrimitiveType).invoke(it, true)
+            }
+            p.javaClass.getMethod("moveTo", locCls, optCls, Float::class.javaPrimitiveType).invoke(p, loc(), o, 0f)
+        })
+        // 4) moveBy(float, MoveOption{Track}) — overload alternativo (semântica do float incerta).
+        attempts.put(attempt("moveBy(0,MoveOption Track)") {
+            val o = newOpt { optCls.getMethod("setMoveType", mtCls).invoke(it, moveType("MoveTypeTrack")) }
+            p.javaClass.getMethod("moveBy", Float::class.javaPrimitiveType, optCls).invoke(p, 0f, o)
+        })
+        // 5) baseline: moveBy(FORWARD) sem opção (referência do WAITING_FOR_START).
+        attempts.put(attempt("moveBy(FORWARD) baseline") {
+            val fwd = dirCls.getMethod("valueOf", String::class.java).invoke(null, "FORWARD")
+            p.javaClass.getMethod("moveBy", dirCls).invoke(p, fwd)
+        })
+
+        var anyOk = false
+        var headline = attempts.getJSONObject(attempts.length() - 1)
+        for (i in 0 until attempts.length()) {
+            val a = attempts.getJSONObject(i)
+            if (a.optString("result") == "ok") { anyOk = true; headline = a; break }
+        }
+        val full = JSONObject().apply {
+            put("path", "A"); put("dist", distM.toDouble())
+            put("attempts", attempts); put("any_ok", anyOk)
+            put("conclusion", if (anyOk)
+                "FRENTE liberou com config '${headline.optString("config")}' → ir para HEARTBEAT"
+            else
+                "todas as configs falharam (esperado com percepção/odometria mortas) → Caminho B/C")
+        }
+        // Resumo compacto para o heartbeat (formato do spec).
+        lastForwardProbe = JSONObject().apply {
+            put("path", "A")
+            put("flag_tried", headline.optString("config"))
+            put("result", headline.optString("result"))
+            headline.optString("exception_class").takeIf { it.isNotEmpty() }?.let { put("exception_class", it) }
+            headline.optString("exception_msg").takeIf { it.isNotEmpty() }?.let { put("exception_msg", it) }
+        }
+        Log.i(TAG, "forwardProbe: $full")
+        return full
+    }
+
     override fun cancelAction() {
         lastAction?.let { act -> runCatching { act.javaClass.getMethod("cancel").invoke(act) } }
         lastAction = null

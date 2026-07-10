@@ -48,6 +48,27 @@ class MotionController(
     /** Recebe o JSON do resultado do cenário de teste (o serviço persiste/publica). */
     @Volatile var frontTestResultSink: ((JSONObject) -> Unit)? = null
     @Volatile private var frontTestRunning = false
+    @Volatile private var probeRunning = false
+
+    /** Roda a varredura do Caminho A em thread própria (usa Thread.sleep). */
+    private fun runForwardProbe(dist: Float) {
+        if (probeRunning) { ack("forward_probe", false, "já em execução"); return }
+        probeRunning = true
+        lastCommandLabel = "forward_probe: varrendo…"
+        lastCommandAt = System.currentTimeMillis()
+        ack("forward_probe", true, "Caminho A iniciado (dist=${dist}m)")
+        Thread({
+            try {
+                val res = chassis.forwardProbe(dist)
+                lastCommandLabel = "forward_probe → ${res.optString("conclusion").take(48)}"
+                runCatching { ackSink?.invoke(res) }
+                Log.i(TAG, "forward_probe resultado: $res")
+            } catch (t: Throwable) {
+                Log.e(TAG, "forward_probe falhou: ${t.message}", t)
+                ack("forward_probe", false, "exceção: ${t.message}")
+            } finally { probeRunning = false }
+        }, "forward-probe").start()
+    }
 
     /**
      * Dispara o cenário [FrontMotionTestScenario2026_07_05] em thread própria (o
@@ -188,6 +209,10 @@ class MotionController(
             // (ACTION_FRONT_TEST) ou por MQTT. NÃO altera a lógica de produção — só
             // orquestra as funções da ponte já existentes.
             "front_test" -> runFrontTest(json.optString("note", ""))
+            // CAMINHO A: varredura de FRENTE com as alavancas reais do MoveOption.
+            // {"type":"forward_probe","dist":0.3} — roda em thread; publica o diag
+            // completo por ack e um resumo compacto no heartbeat (chassis.forwardProbeSummary).
+            "forward_probe" -> runForwardProbe(json.optDouble("dist", 0.3).toFloat())
             "chassis" -> handleChassis(json)
             // ATIVADOR do chassi: alavancas do stack do fabricante (wakeup, modos, mapa).
             // {"type":"chassis_ctl","action":"rebind|wakeup|idle|navi_mode|build_mode|begin_map|loc_on|loc_off|upd_on|upd_off|maps"}

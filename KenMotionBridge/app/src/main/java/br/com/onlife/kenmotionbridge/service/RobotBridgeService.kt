@@ -293,6 +293,9 @@ class RobotBridgeService : Service() {
             put("front_cm", if (tel.frontCm.isNaN()) JSONObject.NULL else round1(tel.frontCm))
             put("blind_mode", motion.blindActiveNow())
             put("ts", now)
+            // ADITIVO (não remove nada do contrato): diagnóstico do Caminho A quando
+            // uma varredura de FRENTE já rodou. Formato: {path, flag_tried, result, …}.
+            chassis.forwardProbeSummary()?.let { put("diag", it) }
         }
         sendFeedback(fb.toString())
 
