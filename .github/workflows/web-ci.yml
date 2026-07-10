@@ -1,0 +1,42 @@
+name: Web CI
+
+# Valida a UI web (Vite/React/Capacitor): dependências, lint, testes e build.
+#
+# O APK da ponte tem workflow próprio (android-build.yml), que só roda quando
+# KenMotionBridge/ muda; este aqui cobre todo o resto do repositório.
+
+on:
+  push:
+    paths-ignore:
+      - "KenMotionBridge/**"
+  pull_request:
+    paths-ignore:
+      - "KenMotionBridge/**"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Não bloqueia o CI: há erros pré-existentes em componentes shadcn/ui e
+      # no VoiceControlScreen. Quando forem zerados, remova o continue-on-error.
+      - name: Lint (informativo)
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Tests (vitest)
+        run: npm test
+
+      - name: Build (vite)
+        run: npm run build
