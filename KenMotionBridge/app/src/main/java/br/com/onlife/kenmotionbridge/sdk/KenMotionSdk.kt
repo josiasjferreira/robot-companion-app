@@ -27,7 +27,8 @@ import java.util.concurrent.TimeUnit
  * @param chassis (opcional) ponte Slamware de velocidade em tempo real; usada por
  *        [pararMovimento] para também zerar a velocidade do caminho de joystick.
  */
-class KenMotionSdk(private val chassis: SlamwareChassis? = null) {
+class KenMotionSdk(private val chassis: SlamwareChassis? = null) :
+    br.com.onlife.kenmotionbridge.control.MotionPort {
 
     companion object {
         private const val TAG = "KenMotionSdk"
@@ -92,7 +93,7 @@ class KenMotionSdk(private val chassis: SlamwareChassis? = null) {
     // ── Comandos de movimento (porta de entrada única) ────────────────────────
 
     /** Chassi apto a receber comando de movimento agora? (canal direto OU sessão CSJBot). */
-    fun isMotionAvailable(): Boolean =
+    override fun isMotionAvailable(): Boolean =
         chassis?.connected == true || (inicializado && estaConectado())
 
     /**
@@ -101,14 +102,14 @@ class KenMotionSdk(private val chassis: SlamwareChassis? = null) {
      * não expõe "andar X metros" (moveBy(float) é ignorado; provado por teste no
      * robô), então a distância vira DURAÇÃO (t = d/v) sobre o passo contínuo.
      */
-    fun moveForward(distanceMeters: Float? = null, speed: Float? = null) {
+    override fun moveForward(distanceMeters: Float?, speed: Float?) {
         val v = (speed ?: VELOCIDADE_PADRAO).coerceIn(0.05f, VELOCIDADE_MAX)
         val durMs = distanceMeters?.let { d -> ((d.coerceIn(0.1f, 5f) / v) * 1000f).toLong() }
         moverFrente(v, durMs)
     }
 
     /** Parada segura — cancela navegação + zera velocidades nos DOIS caminhos. */
-    fun stop() = pararMovimento()
+    override fun stop() = pararMovimento()
 
     /** Move o chassi para frente. [velocidade] em m/s; se [duracaoMs] != null, para sozinho depois. */
     fun moverFrente(velocidade: Float = VELOCIDADE_PADRAO, duracaoMs: Long? = null) =

@@ -33,7 +33,7 @@ class SlamwareChassis(
     private val config: BridgeConfig,
     /** Atualiza a tela: (conectado, erro, serviçoBound, classeSdkTentada). */
     private val onStatus: (Boolean, String, Boolean, String) -> Unit = { _, _, _, _ -> },
-) {
+) : br.com.onlife.kenmotionbridge.control.ChassisPort {
 
     companion object {
         private const val TAG = "SlamwareChassis"
@@ -50,7 +50,7 @@ class SlamwareChassis(
         private const val ROTATION_CLS = "com.slamtec.slamware.robot.Rotation"
     }
 
-    @Volatile var connected: Boolean = false
+    @Volatile override var connected: Boolean = false
         private set
 
     /** Serviço do RobotSDK realmente bound? */
@@ -377,7 +377,7 @@ class SlamwareChassis(
      * platform.setRealtimeVelocity(rtv). Faz fallback para chassis.setLinearVelocity
      * direto se o método de RealTime não existir.
      */
-    fun sendVelocity(linear: Double, angular: Double) {
+    override fun sendVelocity(linear: Double, angular: Double) {
         val p = platform ?: return
         try {
             val velocity = obtainRtv() ?: run {
@@ -424,7 +424,7 @@ class SlamwareChassis(
     @Volatile private var lastForwardAction: Any? = null
 
     /** Status/motivo da última tentativa de FRENTE — não é apagado por stop/ré/giros. */
-    fun lastForwardStatus(): String {
+    override fun lastForwardStatus(): String {
         val a = lastForwardAction ?: return ""
         val st = runCatching { a.javaClass.getMethod("getStatus").invoke(a)?.toString() }.getOrNull().orEmpty()
         val rs = runCatching { a.javaClass.getMethod("getReason").invoke(a)?.toString() }.getOrNull().orEmpty()
@@ -857,7 +857,7 @@ class SlamwareChassis(
     }
 
     /** Move o chassi numa direção discreta: platform.moveBy(MoveDirection). */
-    fun moveBy(dir: Dir): Boolean {
+    override fun moveBy(dir: Dir): Boolean {
         val p = platform ?: return false
         return try {
             val moveDirCls = Class.forName(MOVE_DIR_CLS)
@@ -873,7 +873,7 @@ class SlamwareChassis(
     }
 
     /** Gira o chassi por um ângulo (graus): platform.rotate(Rotation(yawRad)). */
-    fun rotate(graus: Float): Boolean {
+    override fun rotate(graus: Float): Boolean {
         val p = platform ?: return false
         return try {
             val rotCls = Class.forName(ROTATION_CLS)
@@ -897,7 +897,7 @@ class SlamwareChassis(
      * ao contrário do moveBy(FORWARD) que é OA. [distM] em metros à frente do robô.
      * @return status/erro para a tela.
      */
-    fun trackForward(distM: Float = 0.6f): String {
+    override fun trackForward(distM: Float): String {
         val p = platform ?: return "sem plataforma"
         return try {
             val locCls = Class.forName("com.slamtec.slamware.robot.Location")
