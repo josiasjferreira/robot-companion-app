@@ -45,6 +45,42 @@ class MotionController(
             .onFailure { Log.w(TAG, "ack($type) falhou: ${it.message}") }
     }
 
+    /** Recebe o JSON do resultado do cenário de teste (o serviço persiste/publica). */
+    @Volatile var frontTestResultSink: ((JSONObject) -> Unit)? = null
+    @Volatile private var frontTestRunning = false
+
+    /**
+     * Dispara o cenário [FrontMotionTestScenario2026_07_05] em thread própria (o
+     * polling usa Thread.sleep e não pode bloquear o loop de controle). Publica o
+     * resultado por [ackSink] e por [frontTestResultSink]. Reentrância protegida.
+     */
+    private fun runFrontTest(note: String) {
+        if (frontTestRunning) {
+            ack("front_test", false, "já em execução — ignorado")
+            return
+        }
+        frontTestRunning = true
+        lastCommandLabel = "front_test: iniciando…"
+        lastCommandAt = System.currentTimeMillis()
+        ack("front_test", true, "cenário FRENTE 05/07 iniciado")
+        Thread({
+            try {
+                val res = FrontMotionTestScenario2026_07_05(chassis).run()
+                if (note.isNotBlank()) res.operatorNote = note
+                val j = res.toJson()
+                lastCommandLabel = "front_test → ${res.verdict.take(48)}"
+                runCatching { ackSink?.invoke(j) }
+                runCatching { frontTestResultSink?.invoke(j) }
+                Log.i(TAG, "front_test resultado: $j")
+            } catch (t: Throwable) {
+                Log.e(TAG, "front_test falhou: ${t.message}", t)
+                ack("front_test", false, "exceção: ${t.message}")
+            } finally {
+                frontTestRunning = false
+            }
+        }, "front-test-0705").start()
+    }
+
     /** Fim da janela do watchdog do modo cego (300 ms). 0 = modo cego inativo. */
     @Volatile private var blindUntil = 0L
     /** Modo cego ativo agora? (para o feedback blind_mode). */
@@ -146,6 +182,12 @@ class MotionController(
                 lastCommandAt = System.currentTimeMillis()
                 Log.i(TAG, lastCommandLabel)
             }
+            // CENÁRIO DE TESTE "FRENTE 05/07 revisitado": {"type":"front_test","note":"…"}
+            // Roda a sequência documentada (build_mode→begin_map→trackForward→moveBy)
+            // com telemetria estruturada e publica o resultado. Rodável pelo botão da UI
+            // (ACTION_FRONT_TEST) ou por MQTT. NÃO altera a lógica de produção — só
+            // orquestra as funções da ponte já existentes.
+            "front_test" -> runFrontTest(json.optString("note", ""))
             "chassis" -> handleChassis(json)
             // ATIVADOR do chassi: alavancas do stack do fabricante (wakeup, modos, mapa).
             // {"type":"chassis_ctl","action":"rebind|wakeup|idle|navi_mode|build_mode|begin_map|loc_on|loc_off|upd_on|upd_off|maps"}

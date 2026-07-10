@@ -49,6 +49,8 @@ class RobotBridgeService : Service() {
         private const val NOTIF_ID = 1001
         const val ACTION_STOP = "br.com.onlife.kenmotionbridge.STOP"
         const val ACTION_RESTART = "br.com.onlife.kenmotionbridge.RESTART"
+        /** Dispara o cenário de teste FRENTE 05/07 (botão da UI). */
+        const val ACTION_FRONT_TEST = "br.com.onlife.kenmotionbridge.FRONT_TEST"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -114,6 +116,7 @@ class RobotBridgeService : Service() {
         when (intent?.action) {
             ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
             ACTION_RESTART -> if (!freshlyCreated) restartConnections()
+            ACTION_FRONT_TEST -> runCatching { motion.onCommand("""{"type":"front_test"}""") }
         }
         freshlyCreated = false
         return START_STICKY
@@ -135,6 +138,16 @@ class RobotBridgeService : Service() {
         // mesmo canal de feedback (ken/motion/feedback) via :mqtt.
         motion.ackSink = { j -> sendFeedback(j.toString()) }
         motion.diagRequester = { publicarDiag() }
+        // Resultado do cenário de teste FRENTE: publica no feedback E salva em arquivo
+        // (filesDir/front_test_<ts>.json) para comparação futura pelo operador.
+        motion.frontTestResultSink = { j ->
+            sendFeedback(j.toString())
+            runCatching {
+                val f = java.io.File(filesDir, "front_test_${System.currentTimeMillis()}.json")
+                f.writeText(j.toString(2))
+                Log.i(TAG, "Resultado do teste FRENTE salvo em ${f.absolutePath}")
+            }.onFailure { Log.w(TAG, "Falha ao salvar resultado do teste: ${it.message}") }
+        }
     }
 
     /** Snapshot de diagnóstico (Rota A) — "type":"diag" em ken/motion/feedback. */

@@ -35,6 +35,15 @@ class MainActivity : AppCompatActivity() {
             startService(Intent(this, RobotBridgeService::class.java).apply { action = RobotBridgeService.ACTION_STOP })
             startService(Intent(this, MqttBridgeService::class.java).apply { action = RobotBridgeService.ACTION_STOP })
         }
+        binding.btnFrontTest.setOnClickListener {
+            // Dispara o cenário "FRENTE 05/07 revisitado" no processo do chassi.
+            startService(Intent(this, RobotBridgeService::class.java).apply {
+                action = RobotBridgeService.ACTION_FRONT_TEST
+            })
+            android.widget.Toast.makeText(
+                this, "Teste FRENTE iniciado — acompanhe o resultado no log/feedback", android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
         binding.btnSettings.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
