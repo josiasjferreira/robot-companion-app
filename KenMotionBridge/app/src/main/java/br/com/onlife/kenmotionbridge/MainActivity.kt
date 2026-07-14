@@ -35,6 +35,12 @@ class MainActivity : AppCompatActivity() {
             startService(Intent(this, RobotBridgeService::class.java).apply { action = RobotBridgeService.ACTION_STOP })
             startService(Intent(this, MqttBridgeService::class.java).apply { action = RobotBridgeService.ACTION_STOP })
         }
+        binding.chkFrontSensor.setOnCheckedChangeListener { _, isChecked ->
+            startService(Intent(this, RobotBridgeService::class.java).apply {
+                action = RobotBridgeService.ACTION_FRONT_SENSOR
+                putExtra("on", isChecked)
+            })
+        }
         binding.btnForwardSafe.setOnClickListener {
             // FRENTE com gate de nav-ready (SlamwareIntegrationService).
             startService(Intent(this, RobotBridgeService::class.java).apply {

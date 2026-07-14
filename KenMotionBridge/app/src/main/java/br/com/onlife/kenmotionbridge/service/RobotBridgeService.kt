@@ -53,6 +53,8 @@ class RobotBridgeService : Service() {
         const val ACTION_FRONT_TEST = "br.com.onlife.kenmotionbridge.FRONT_TEST"
         /** Dispara a FRENTE com gate de nav-ready (botão "Percepção / Frente segura"). */
         const val ACTION_FORWARD_SAFE = "br.com.onlife.kenmotionbridge.FORWARD_SAFE"
+        /** Toggle "Usar sensor frontal" (extra booleano "on"). */
+        const val ACTION_FRONT_SENSOR = "br.com.onlife.kenmotionbridge.FRONT_SENSOR"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -121,6 +123,10 @@ class RobotBridgeService : Service() {
             ACTION_RESTART -> if (!freshlyCreated) restartConnections()
             ACTION_FRONT_TEST -> runCatching { motion.onCommand("""{"type":"front_test"}""") }
             ACTION_FORWARD_SAFE -> runForwardSafeFromUi()
+            ACTION_FRONT_SENSOR -> {
+                val on = intent.getBooleanExtra("on", true)
+                runCatching { motion.onCommand("""{"type":"front_sensor","on":$on}""") }
+            }
         }
         freshlyCreated = false
         return START_STICKY
@@ -318,6 +324,8 @@ class RobotBridgeService : Service() {
             put("w", round3(motion.currentW))
             put("front_cm", if (tel.frontCm.isNaN()) JSONObject.NULL else round1(tel.frontCm))
             put("blind_mode", motion.blindActiveNow())
+            put("moving", motion.isMoving())
+            put("mode", motion.forwardModeLabel())   // "com_sensor" | "sem_sensor"
             put("ts", now)
             // ADITIVO (não remove nada do contrato): diagnóstico do Caminho A quando
             // uma varredura de FRENTE já rodou. Formato: {path, flag_tried, result, …}.

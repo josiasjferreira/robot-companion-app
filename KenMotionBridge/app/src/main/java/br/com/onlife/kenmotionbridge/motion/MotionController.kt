@@ -223,6 +223,34 @@ class MotionController(
             // {"type":"forward_probe","dist":0.3} — roda em thread; publica o diag
             // completo por ack e um resumo compacto no heartbeat (chassis.forwardProbeSummary).
             "forward_probe" -> runForwardProbe(json.optDouble("dist", 0.3).toFloat())
+            // FRENTE com escolha explícita do sensor (contrato do Lovable):
+            // {"type":"forward","front_sensor":true|false,"dist":0.5}
+            //   front_sensor=true  → moveBy(FORWARD)  (OA, para em obstáculo)
+            //   front_sensor=false → trackForward     (odometria, ignora obstáculo)
+            // NÃO existe velocidade bruta neste SDK (provado nos APKs do fabricante,
+            // ver docs/RE_ROBOSTUDIO_MOVIMENTO.md); "sem sensor" = MoveTypeTrack.
+            "forward" -> {
+                val comSensor = json.optBoolean("front_sensor", frontSensor)
+                val dist = json.optDouble("dist", 0.5).toFloat()
+                val res = if (comSensor) {
+                    val ok = chassis.moveBy(SlamwareChassis.Dir.FORWARD)
+                    motionSdk?.moverNativo(SlamwareChassis.Dir.FORWARD)
+                    "moveBy(FORWARD) com_sensor ${if (ok) "enviado" else "falhou"}"
+                } else {
+                    "trackForward sem_sensor → " + chassis.trackForward(dist)
+                }
+                lastForwardMode = if (comSensor) "com_sensor" else "sem_sensor"
+                lastCommandLabel = "forward → $res"
+                lastCommandAt = System.currentTimeMillis()
+                Log.i(TAG, lastCommandLabel)
+            }
+            // TOGGLE "Usar sensor frontal" (UI/MQTT): {"type":"front_sensor","on":true}
+            "front_sensor" -> {
+                frontSensor = json.optBoolean("on", true)
+                forwardMode = if (frontSensor) ForwardMode.OA else ForwardMode.TRACK
+                lastCommandLabel = "front_sensor = $frontSensor (${forwardMode})"
+                lastCommandAt = System.currentTimeMillis()
+            }
             // FRENTE UNIFICADA: {"type":"forward_unified","dist":0.5} — escada
             // automática: nav pronta→OA nativo; LIDAR vivo→TRACK; morto→recusa.
             "forward_unified" -> {
@@ -429,6 +457,20 @@ class MotionController(
 
     /** Dica de nav-ready (atualizada a cada 2 s pelo snapshot de percepção do serviço). */
     @Volatile var navReadyHint: Boolean = false
+
+    /** Toggle "Usar sensor frontal" (padrão LIGADO). true=OA (para em obstáculo), false=TRACK. */
+    @Volatile var frontSensor: Boolean = true
+    /** Último modo de frente usado, para a telemetria (com_sensor|sem_sensor). */
+    @Volatile var lastForwardMode: String = "com_sensor"; private set
+
+    /** Robô se movendo agora? (para o feedback moving). */
+    fun isMoving(): Boolean = abs(currentV) > 0.02 || abs(currentW) > 0.05
+    /** Modo de frente efetivo p/ telemetria: resolve AUTO pela dica de percepção. */
+    fun forwardModeLabel(): String = when (forwardMode) {
+        ForwardMode.OA -> "com_sensor"
+        ForwardMode.TRACK -> "sem_sensor"
+        ForwardMode.AUTO -> if (navReadyHint) "com_sensor" else "sem_sensor"
+    }
 
     private fun stopDrive() {
         if (lastDir == null) return

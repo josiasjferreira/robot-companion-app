@@ -150,6 +150,16 @@
                 android:text="Parar ponte" />
         </LinearLayout>
 
+        <CheckBox
+            android:id="@+id/chkFrontSensor"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:checked="true"
+            android:text="Usar sensor frontal (LIGADO = para em obstáculo; DESLIGADO = avanço bruto)"
+            android:textColor="#C9D1D9"
+            android:textSize="13sp" />
+
         <Button
             android:id="@+id/btnForwardSafe"
             android:layout_width="match_parent"

@@ -33,6 +33,8 @@ Campos **contratados** (nunca remover — o web marca OFFLINE se faltar >5 s):
 
 Campos **aditivos** (podem faltar; o web ignora se não conhecer):
 
+- `moving` — bool, robô em movimento agora.
+- `mode` — `"com_sensor"` (OA, para em obstáculo) ou `"sem_sensor"` (TRACK, bruto).
 - `diag` — diagnóstico do Caminho A quando uma varredura de FRENTE já rodou:
   `{ "path":"A", "flag_tried":"…", "result":"ok|waiting_for_start|blocked|exception", "exception_class":"…", "exception_msg":"…" }`
 
@@ -55,6 +57,8 @@ internamente para m/s pelos tetos de `bridge_config.json`.
 | `forward_probe` | `{dist?}` | **Caminho A** — varredura de FRENTE (§4.1) |
 | `forward_safe` | — | FRENTE com gate de nav-ready (SlamwareIntegrationService); recusa com motivo se sensor morto |
 | `forward_unified` | `{dist?}` | **FRENTE UNIFICADA** — escada automática: nav pronta→OA nativo; LIDAR vivo→TRACK; morto→recusa com motivo |
+| `forward` | `{front_sensor:bool, dist?}` | FRENTE com escolha explícita: `true`→moveBy(FORWARD) OA; `false`→trackForward (sem OA). Não existe velocidade bruta (ver docs/RE_ROBOSTUDIO_MOVIMENTO.md) |
+| `front_sensor` | `{on:bool}` | toggle "Usar sensor frontal" (LIGADO=OA para em obstáculo; DESLIGADO=TRACK bruto) |
 | `forward_mode` | `{mode:"auto"\|"track"\|"oa"}` | estratégia do joystick p/ frente (padrão AUTO: decide pela percepção) |
 | `front_test` | `{note?}` | cenário "FRENTE 05/07 revisitado" |
 | `sys_param` | `{key,value?}` | get/set de parâmetro de sistema |
