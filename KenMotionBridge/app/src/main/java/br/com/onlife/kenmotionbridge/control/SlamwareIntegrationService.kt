@@ -161,6 +161,55 @@ class SlamwareIntegrationService(
 
     fun stopPerceptionLoop() { pollJob?.cancel(); pollJob = null }
 
+    // ── KEEP-ALIVE de percepção (réplica do RobotStateUpdateService do RoboStudio) ─
+
+    private var keepAliveJob: Job? = null
+    @Volatile var keepAliveActive: Boolean = false; private set
+
+    /**
+     * KEEP-ALIVE — replica o `RobotStateUpdateService` do RoboStudio (engenharia
+     * reversa, docs/RE_ROBOSTUDIO_MOVIMENTO.md §7): uma thread de polling CONTÍNUO
+     * que, desde a conexão, puxa o estado do robô sem parar. É isso que mantém o
+     * canal de percepção do SDP ativo/fluindo — a nossa ponte antes só lia o laser
+     * a cada 2 s, e o RoboStudio lê getPose ~5 Hz e getLaserScan ~1 Hz o tempo todo.
+     *
+     * Cadência REAL do RoboStudio (loop base 33 ms): getPose i%6 (~200 ms),
+     * getLaserScan i%30 (~1 s), getRealTimeVelocity i%7, getLocalizationQuality
+     * i%333 (~11 s), getWorkMode i%60. Aqui usamos base 100 ms (mais leve para a
+     * rede 1445 do tablet) mantendo os MESMOS intervalos reais.
+     */
+    fun startKeepAlive(scope: CoroutineScope, baseMs: Long = 100L) {
+        stopKeepAlive()
+        keepAliveActive = true
+        keepAliveJob = scope.launch {
+            // Burst inicial (como o RoboStudio: requireMapList/getRobotInfo/mapData).
+            runCatching { chassis.diagJson() }   // toca getCurrentMap/getMapImage/health uma vez
+            var i = 0L
+            while (isActive) {
+                if (isConnected()) {
+                    try {
+                        // getPose ~5 Hz (i%2 com base 100 ms = 200 ms).
+                        if (i % 2 == 0L) chassis.readTelemetry()
+                        // getLaserScan ~1 Hz (i%10 = 1 s) — o sensor primário do SLAM.
+                        if (i % 10 == 0L) chassis.laserPointCount()
+                        // getRealTimeVelocity ~ i%2 já coberto por readTelemetry (lê RTV).
+                        // getDepthSensorData ~1 Hz.
+                        if (i % 10 == 5L) chassis.depthPointCount()
+                        // getLocalizationQuality ~11 s.
+                        if (i % 110 == 0L) chassis.localizationQuality01()
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "keep-alive tick erro (continua): ${t.message}")
+                    }
+                }
+                i++
+                delay(baseMs)
+            }
+        }
+        Log.i(TAG, "keep-alive de percepção iniciado (base ${baseMs}ms)")
+    }
+
+    fun stopKeepAlive() { keepAliveJob?.cancel(); keepAliveJob = null; keepAliveActive = false }
+
     // ── Movimento com gate de segurança ───────────────────────────────────────
 
     /**

@@ -113,6 +113,10 @@ class RobotBridgeService : Service() {
         connectAll()
         startControlLoop()
         startFeedbackLoop()
+        // KEEP-ALIVE de percepção (réplica do RobotStateUpdateService do RoboStudio):
+        // polling contínuo de pose/laser/localização que mantém o canal de percepção
+        // do SDP fluindo — sem isso o LIDAR pode nunca começar a publicar.
+        integration.startKeepAlive(scope)
         StatusBus.update { it.copy(serviceRunning = true) }
         freshlyCreated = true
     }
@@ -249,12 +253,14 @@ class RobotBridgeService : Service() {
 
     private fun restartConnections() {
         scope.launch {
+            runCatching { integration.stopKeepAlive() }
             runCatching { chassis.disconnect() }
             config = BridgeConfig.load(this@RobotBridgeService)
             buildPipeline()
             applyChassisRouting()
             chassis.connect()
             motionSdk.inicializarConexaoRobo()
+            integration.startKeepAlive(scope)
         }
     }
 
@@ -437,6 +443,7 @@ class RobotBridgeService : Service() {
     override fun onDestroy() {
         StatusBus.update { it.copy(serviceRunning = false, sdkConnected = false) }
         loopJob?.cancel(); feedbackJob?.cancel()
+        runCatching { integration.stopKeepAlive() }
         runCatching { motion.stop() }
         runCatching { motionSdk.liberar() }
         runCatching { chassis.disconnect() }

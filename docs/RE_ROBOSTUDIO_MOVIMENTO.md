@@ -70,3 +70,36 @@ PARAR             : action.cancel() / cancelAllActions()
 Este documento embasa a implementação do toggle "Usar sensor frontal" no
 KenMotionBridge, mapeando com/sem sensor para OA/Track — a API real, não a
 inexistente RealTimeVelocity.
+
+## 7. KEEP-ALIVE de percepção — a diferença que faltava (decompilação profunda)
+
+Decompilação completa via androguard (não só strings) revelou o
+`com.csjbot.robotstation.RobotStateUpdateService`. Ele é iniciado no `onCreate`
+(logo após conectar) e roda uma **thread de polling CONTÍNUO** enquanto conectado
+— loop base de **33 ms (~30 Hz)** com leituras rotativas do platform:
+
+```
+inicial: requireMapData(); getRobotInfo(); requireMapData(LOCATION_MAP);
+         requireMapList(); requireSpecialAreaList();
+loop (sleep 33 ms):
+  i%7  == 0 → requireRealTimeVelocity()   (~230 ms)
+  i%6  == 0 → startGetPose()  = getPose() (~200 ms)
+  i%30 == 0 → updateLaserScan() = getLaserScan()  (~1 s)
+  i%30 == 0 → requireTargetPose(); (+depth se camada ligada) requireDepthSensorData()
+  i%15 == 0 → requireMapData(se needed); requireMoveAction()
+  i%60 == 0 → requireWorkMode()
+  i%300== 0 → requireCurrentMap()
+  i%333== 0 → getLocalizationQuality()   (~11 s)
+```
+
+**Interpretação:** o RoboStudio **puxa o estado do robô sem parar** desde a
+conexão — getPose ~5 Hz, getLaserScan ~1 Hz, o tempo todo. A nossa ponte, antes,
+lia o laser só a cada 2 s (no diag) e getPose a 1 Hz. A hipótese concreta é que
+esse **polling contínuo mantém o canal de percepção do SDP ativo/fluindo** — sem
+ele, o pipeline de laser pode nunca "acordar" ou lapsar.
+
+**Implementado:** `SlamwareIntegrationService.startKeepAlive()` replica esse
+serviço (base 100 ms, mesmos intervalos reais: getPose ~5 Hz, getLaserScan ~1 Hz,
+depth ~1 Hz, localização ~11 s), iniciado no `onCreate` do RobotBridgeService
+logo após conectar e mantido enquanto a ponte roda. É a tentativa concreta de
+"acordar" a percepção pela mesma via do app do fabricante — sem inventar API.
