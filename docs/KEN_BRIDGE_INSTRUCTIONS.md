@@ -59,6 +59,8 @@ internamente para m/s pelos tetos de `bridge_config.json`.
 | `forward_unified` | `{dist?}` | **FRENTE UNIFICADA** — escada automática: nav pronta→OA nativo; LIDAR vivo→TRACK; morto→recusa com motivo |
 | `forward` | `{front_sensor:bool, dist?}` | FRENTE com escolha explícita: `true`→moveBy(FORWARD) OA; `false`→trackForward (sem OA). Não existe velocidade bruta (ver docs/RE_ROBOSTUDIO_MOVIMENTO.md) |
 | `front_sensor` | `{on:bool}` | toggle "Usar sensor frontal" (LIGADO=OA para em obstáculo; DESLIGADO=TRACK bruto) |
+| `greeter` | `{on:bool, threshold_cm?:80, message?}` | **Modo Recepção** — LIDAR detecta pessoa ≤ threshold → fala de boas-vindas no alto-falante (cooldown 18 s) |
+| `speak` | `{text?}` | fala manual no alto-falante do robô (testa o TTS; sem `text` usa a mensagem de boas-vindas) |
 | `forward_mode` | `{mode:"auto"\|"track"\|"oa"}` | estratégia do joystick p/ frente (padrão AUTO: decide pela percepção) |
 | `front_test` | `{note?}` | cenário "FRENTE 05/07 revisitado" |
 | `sys_param` | `{key,value?}` | get/set de parâmetro de sistema |

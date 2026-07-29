@@ -167,6 +167,30 @@
             android:layout_marginTop="8dp"
             android:text="Percepção / Frente segura" />
 
+        <CheckBox
+            android:id="@+id/chkGreeter"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Modo Recepção — saudar visitante a ≤ 80 cm (Intersolar 2026)"
+            android:textColor="#C9D1D9"
+            android:textSize="13sp" />
+        <TextView
+            android:id="@+id/txtGreeter"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textColor="#9ECBFF"
+            android:textSize="12sp"
+            android:text="" />
+
+        <Button
+            android:id="@+id/btnSpeakTest"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Testar boas-vindas (falar agora)" />
+
         <Button
             android:id="@+id/btnFrontTest"
             android:layout_width="match_parent"

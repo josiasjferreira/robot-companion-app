@@ -31,6 +31,37 @@ class MotionController(
         private const val TAG = "MotionController"
         /** Teto de segurança do modo cego (m/s), configurável. */
         private const val V_MAX_BLIND = 0.35
+        /** Distância mínima válida do greeter (cm) — evita a própria carcaça/ruído. */
+        private const val GREET_MIN_CM = 8.0
+        /** Intervalo entre boas-vindas (ms) — não repete enquanto a pessoa fica parada. */
+        private const val GREET_COOLDOWN_MS = 18_000L
+        /** Mensagem padrão do estande (Intersolar 2026). */
+        const val GREET_MESSAGE_DEFAULT =
+            "Bem-vindo ao estande da Solar Life Energy na Intersolar 2026! " +
+            "Aproxime-se para conhecer as novidades tecnológicas da Solar Life Energy."
+    }
+
+    // ── MODO RECEPÇÃO (greeter): LIDAR detecta pessoa ≤ 80 cm → fala de boas-vindas ──
+    /** Aciona o alto-falante (SpeechEngine). Injetado pelo RobotBridgeService. */
+    @Volatile var speaker: ((String) -> Unit)? = null
+    @Volatile var greeterEnabled: Boolean = false
+    @Volatile var greeterThresholdCm: Double = 80.0
+    @Volatile var greetMessage: String = GREET_MESSAGE_DEFAULT
+    @Volatile private var lastGreetAt = 0L
+    /** Notifica o serviço que uma boas-vindas foi disparada (feedback/telemetria). */
+    @Volatile var greetSink: ((Double) -> Unit)? = null
+
+    /** Chamado a cada tick com a distância frontal (cm). Dispara a saudação com cooldown. */
+    private fun greeterCheck(frontCmNow: Double) {
+        if (!greeterEnabled || frontCmNow.isNaN()) return
+        if (frontCmNow < GREET_MIN_CM || frontCmNow > greeterThresholdCm) return
+        val now = System.currentTimeMillis()
+        if (now - lastGreetAt < GREET_COOLDOWN_MS) return
+        lastGreetAt = now
+        Log.i(TAG, "greeter: pessoa a %.0f cm → boas-vindas".format(frontCmNow))
+        runCatching { speaker?.invoke(greetMessage) }
+            .onFailure { Log.w(TAG, "greeter fala falhou: ${it.message}") }
+        runCatching { greetSink?.invoke(frontCmNow) }
     }
 
     /** Canal de ACK dos comandos de mapa — o serviço publica em ken/motion/feedback. */
@@ -219,6 +250,26 @@ class MotionController(
             // (ACTION_FRONT_TEST) ou por MQTT. NÃO altera a lógica de produção — só
             // orquestra as funções da ponte já existentes.
             "front_test" -> runFrontTest(json.optString("note", ""))
+            // MODO RECEPÇÃO (Intersolar): {"type":"greeter","on":true,"threshold_cm":80,"message":"…"}
+            // LIDAR detecta pessoa ≤ threshold → fala de boas-vindas no alto-falante do robô.
+            "greeter" -> {
+                greeterEnabled = json.optBoolean("on", true)
+                greeterThresholdCm = json.optDouble("threshold_cm", 80.0).coerceIn(20.0, 300.0)
+                if (json.has("message")) greetMessage = json.optString("message", GREET_MESSAGE_DEFAULT)
+                lastGreetAt = 0L   // permite saudar já na próxima detecção
+                lastCommandLabel = "greeter = $greeterEnabled (${greeterThresholdCm.toInt()}cm)"
+                lastCommandAt = System.currentTimeMillis()
+                ack("greeter", true, lastCommandLabel)
+                Log.i(TAG, lastCommandLabel)
+            }
+            // Fala manual (teste do alto-falante): {"type":"speak","text":"…"}
+            "speak" -> {
+                val t = json.optString("text").ifBlank { greetMessage }
+                runCatching { speaker?.invoke(t) }
+                lastCommandLabel = "speak: ${t.take(32)}"
+                lastCommandAt = System.currentTimeMillis()
+                ack("speak", true, "falando")
+            }
             // CAMINHO A: varredura de FRENTE com as alavancas reais do MoveOption.
             // {"type":"forward_probe","dist":0.3} — roda em thread; publica o diag
             // completo por ack e um resumo compacto no heartbeat (chassis.forwardProbeSummary).
@@ -354,6 +405,9 @@ class MotionController(
         if (!frontCm.isNaN() && frontCm < config.safeFrontCm && tv > 0.0) {
             tv = 0.0
         }
+
+        // MODO RECEPÇÃO: usa a mesma leitura do LIDAR frontal para saudar visitantes.
+        greeterCheck(frontCm)
 
         // Rampa suave (limita a variação por tick).
         currentV = ramp(currentV, tv, config.accelLinear * dtSec)

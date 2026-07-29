@@ -55,6 +55,10 @@ class RobotBridgeService : Service() {
         const val ACTION_FORWARD_SAFE = "br.com.onlife.kenmotionbridge.FORWARD_SAFE"
         /** Toggle "Usar sensor frontal" (extra booleano "on"). */
         const val ACTION_FRONT_SENSOR = "br.com.onlife.kenmotionbridge.FRONT_SENSOR"
+        /** Toggle "Modo Recepção" (extra booleano "on"). */
+        const val ACTION_GREETER = "br.com.onlife.kenmotionbridge.GREETER"
+        /** Testar boas-vindas (fala a mensagem uma vez). */
+        const val ACTION_SPEAK_TEST = "br.com.onlife.kenmotionbridge.SPEAK_TEST"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -66,6 +70,7 @@ class RobotBridgeService : Service() {
     private lateinit var motionSdk: KenMotionSdk
     private lateinit var motion: MotionController
     private lateinit var integration: br.com.onlife.kenmotionbridge.control.SlamwareIntegrationService
+    private val speech by lazy { SpeechEngine(this) }
     private val networkRouter by lazy { NetworkRouter(this) }
     private var wakeLock: PowerManager.WakeLock? = null
     private var freshlyCreated = false
@@ -131,6 +136,12 @@ class RobotBridgeService : Service() {
                 val on = intent.getBooleanExtra("on", true)
                 runCatching { motion.onCommand("""{"type":"front_sensor","on":$on}""") }
             }
+            ACTION_GREETER -> {
+                val on = intent.getBooleanExtra("on", true)
+                runCatching { motion.onCommand("""{"type":"greeter","on":$on,"threshold_cm":80}""") }
+                StatusBus.update { it.copy(greeterEnabled = on) }
+            }
+            ACTION_SPEAK_TEST -> runCatching { motion.onCommand("""{"type":"speak"}""") }
         }
         freshlyCreated = false
         return START_STICKY
@@ -156,6 +167,16 @@ class RobotBridgeService : Service() {
         integration = br.com.onlife.kenmotionbridge.control.SlamwareIntegrationService(chassis)
         motion.safeForward = { val r = integration.moveForwardSafe(); r.accepted to r.reason }
         motion.unifiedForwardFn = { d -> val r = integration.unifiedForward(d); r.accepted to r.reason }
+        // MODO RECEPÇÃO: fala pelo alto-falante do robô + feedback ao acionar a saudação.
+        motion.speaker = { text -> speech.speak(text) }
+        motion.greetSink = { distCm ->
+            StatusBus.update { it.copy(lastGreetAt = System.currentTimeMillis(), lastGreetDistCm = distCm) }
+            runCatching {
+                sendFeedback(org.json.JSONObject().apply {
+                    put("type", "greeter_triggered"); put("dist_cm", round1(distCm)); put("ts", System.currentTimeMillis())
+                }.toString())
+            }
+        }
         // Resultado do cenário de teste FRENTE: publica no feedback E salva em arquivo
         // (filesDir/front_test_<ts>.json) para comparação futura pelo operador.
         motion.frontTestResultSink = { j ->
@@ -444,6 +465,7 @@ class RobotBridgeService : Service() {
         StatusBus.update { it.copy(serviceRunning = false, sdkConnected = false) }
         loopJob?.cancel(); feedbackJob?.cancel()
         runCatching { integration.stopKeepAlive() }
+        runCatching { speech.release() }
         runCatching { motion.stop() }
         runCatching { motionSdk.liberar() }
         runCatching { chassis.disconnect() }

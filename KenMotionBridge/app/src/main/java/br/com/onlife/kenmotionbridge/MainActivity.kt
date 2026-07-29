@@ -56,6 +56,17 @@ class MainActivity : AppCompatActivity() {
                 this, "Teste FRENTE iniciado — acompanhe o resultado no log/feedback", android.widget.Toast.LENGTH_LONG
             ).show()
         }
+        binding.chkGreeter.setOnCheckedChangeListener { _, isChecked ->
+            startService(Intent(this, RobotBridgeService::class.java).apply {
+                action = RobotBridgeService.ACTION_GREETER
+                putExtra("on", isChecked)
+            })
+        }
+        binding.btnSpeakTest.setOnClickListener {
+            startService(Intent(this, RobotBridgeService::class.java).apply {
+                action = RobotBridgeService.ACTION_SPEAK_TEST
+            })
+        }
         binding.btnApps.setOnClickListener {
             startActivity(Intent(this, AppManagerActivity::class.java))
         }
@@ -121,6 +132,16 @@ class MainActivity : AppCompatActivity() {
                     binding.txtPerception.text =
                         "lidar: $lidar pts   depth: $depth pts   loc: $loc   nav: $nav"
                     binding.txtForwardSafe.text = s.lastForwardSafe
+
+                    // Modo Recepção — estado + última saudação.
+                    binding.txtGreeter.text = when {
+                        !s.greeterEnabled -> "Recepção: desligada"
+                        s.lastGreetAt == 0L -> "Recepção: LIGADA — aguardando visitante (≤ 80 cm)"
+                        else -> "Recepção: LIGADA — última saudação há %ds%s".format(
+                            (System.currentTimeMillis() - s.lastGreetAt) / 1000,
+                            if (s.lastGreetDistCm.isNaN()) "" else " (a %.0f cm)".format(s.lastGreetDistCm),
+                        )
+                    }
                 }
             }
         }

@@ -51,6 +51,12 @@ data class BridgeStatus(
     val navigationReady: Boolean = false,
     /** Resultado da última FRENTE segura (forward_safe): aceito/motivo. */
     val lastForwardSafe: String = "",
+    // ── Modo Recepção (greeter) ───────────────────────────────────────────────
+    val greeterEnabled: Boolean = false,
+    /** Epoch (ms) da última boas-vindas disparada. 0 = nenhuma. */
+    val lastGreetAt: Long = 0L,
+    /** Distância (cm) em que a última boas-vindas foi disparada. */
+    val lastGreetDistCm: Double = Double.NaN,
 )
 
 object StatusBus {
