@@ -23,6 +23,8 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -47,9 +49,22 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: ./gradlew --no-daemon assembleDebug
 
-      - name: Upload APK
+      - name: Upload APK (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: KenMotionBridge-debug-apk
           path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      # Publica o APK como Release com tag FIXA (kenmotion-latest): o link de
+      # download fica estável e funciona no celular sem login/GitHub UI:
+      #   https://github.com/josiasjferreira/robot-companion-app/releases/download/kenmotion-latest/app-debug.apk
+      - name: Publish APK to Release (link estável p/ download no celular)
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: kenmotion-latest
+          name: KenMotionBridge — último APK
+          body: "APK de debug mais recente do KenMotionBridge (build automático). Baixe o app-debug.apk abaixo."
+          files: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          fail_on_unmatched_files: true
