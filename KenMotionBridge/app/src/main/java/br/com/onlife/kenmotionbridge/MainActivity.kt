@@ -41,6 +41,14 @@ class MainActivity : AppCompatActivity() {
                 putExtra("on", isChecked)
             })
         }
+        binding.btnLidarTest.setOnClickListener {
+            startService(Intent(this, RobotBridgeService::class.java).apply {
+                action = RobotBridgeService.ACTION_LIDAR_TEST
+            })
+            android.widget.Toast.makeText(
+                this, "Testando LIDAR — veja o painel Percepção (SLAM)", android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
         binding.btnForwardSafe.setOnClickListener {
             // FRENTE com gate de nav-ready (SlamwareIntegrationService).
             startService(Intent(this, RobotBridgeService::class.java).apply {

@@ -250,6 +250,24 @@ class MotionController(
             // (ACTION_FRONT_TEST) ou por MQTT. NÃO altera a lógica de produção — só
             // orquestra as funções da ponte já existentes.
             "front_test" -> runFrontTest(json.optString("note", ""))
+            // TESTE DO LIDAR: {"type":"lidar_test"} — veredito claro (pts + depth + loc),
+            // publica o diag completo com sensors[] (LIDAR_HEALTH). Para validar o reparo
+            // do cabo de comunicação do LIDAR (PACECAT) e finalizar a etapa.
+            "lidar_test" -> {
+                val lidarPts = chassis.laserPointCount()
+                val depthPts = chassis.depthPointCount()
+                val loc = chassis.localizationQuality01()
+                val ok = lidarPts > 0
+                val verdict = if (ok)
+                    "LIDAR VIVO: %d pts (depth=%d, loc=%.2f) — percepcao OK, pronto p/ navegar".format(lidarPts, depthPts, loc)
+                else
+                    "LIDAR ainda 0 pts (depth=%d) — reiniciar o IPC/robo p/ re-detectar o LIDAR apos o reparo do cabo".format(depthPts)
+                ack("lidar_test", ok, verdict)
+                diagRequester?.invoke()   // publica o diag completo com sensors[]
+                lastCommandLabel = "lidar_test → " + verdict.take(48)
+                lastCommandAt = System.currentTimeMillis()
+                Log.i(TAG, "lidar_test: $verdict")
+            }
             // MODO RECEPÇÃO (Intersolar): {"type":"greeter","on":true,"threshold_cm":80,"message":"…"}
             // LIDAR detecta pessoa ≤ threshold → fala de boas-vindas no alto-falante do robô.
             "greeter" -> {

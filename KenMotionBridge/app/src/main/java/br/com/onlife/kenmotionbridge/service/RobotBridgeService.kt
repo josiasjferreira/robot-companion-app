@@ -59,6 +59,8 @@ class RobotBridgeService : Service() {
         const val ACTION_GREETER = "br.com.onlife.kenmotionbridge.GREETER"
         /** Testar boas-vindas (fala a mensagem uma vez). */
         const val ACTION_SPEAK_TEST = "br.com.onlife.kenmotionbridge.SPEAK_TEST"
+        /** Testar o LIDAR (veredito de pontos/saúde). */
+        const val ACTION_LIDAR_TEST = "br.com.onlife.kenmotionbridge.LIDAR_TEST"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -142,6 +144,7 @@ class RobotBridgeService : Service() {
                 StatusBus.update { it.copy(greeterEnabled = on) }
             }
             ACTION_SPEAK_TEST -> runCatching { motion.onCommand("""{"type":"speak"}""") }
+            ACTION_LIDAR_TEST -> runCatching { motion.onCommand("""{"type":"lidar_test"}""") }
         }
         freshlyCreated = false
         return START_STICKY
