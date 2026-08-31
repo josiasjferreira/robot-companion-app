@@ -21,6 +21,15 @@ Pendência única para o robô se mover: colocar o `RobotSDK_*.aar` em
 `KenMotionBridge/app/libs/` — ver `KenMotionBridge/app/libs/PLACE_AAR_HERE.md`.
 Instalação no tablet: `KenMotionBridge/INSTALL_TABLET.md`.
 
+Teste de movimento pela linha de comando (vence o watchdog de 400 ms da ponte,
+que zera a velocidade sem comandos novos — publica a 5 Hz e envia `stop` ao final):
+
+```bash
+./scripts/drive-test.sh frente 5 30     # frente por 5 s a 30% (Windows: .\scripts\drive-test.ps1)
+./scripts/drive-test.sh stop            # parada imediata
+./scripts/drive-test.sh feedback        # acompanha ken/motion/feedback + telemetria
+```
+
 ## Project info
 
 **URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
